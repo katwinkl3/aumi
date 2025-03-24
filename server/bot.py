@@ -1,11 +1,11 @@
 import os
 from typing import Dict, Any
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from consts import TELEGRAM_BOT_TOKEN, AUMI_URL, WEBHOOK_URL
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from dotenv import load_dotenv
-from consts import *
 import redis
+from urllib.parse import urlparse, quote
 
 # Configure Redis client
 redis_client = redis.Redis(host='localhost', port=6379, db=0)
@@ -18,20 +18,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Load environment variables
-load_dotenv()
-
-# Get Telegram bot token from environment variable
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-AUMI_URL = os.getenv("AUMI_URL")
-
-@dataclass
-class ApiResponse:
-    Code: int
-    Msg: str
-    Data: Dict
-
+# Telegram handling
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Handle /start command
@@ -42,7 +29,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         inline_keyboard=[
             [InlineKeyboardButton(
                 text="Access App",
-                web_app=AUMI_URL
+                web_app=WebAppInfo(url=AUMI_URL)
             )]
         ]
     )
@@ -101,19 +88,40 @@ async def get_user_info(update: Update, context: ContextTypes.DEFAULT_TYPE) -> D
     
     return user_info
 
+# def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None: #todo - queue + rate limit
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming text messages"""
-    user_info = await get_user_info(update, context)
-    await update.message.reply_text(
-        f"I've received your message: '{user_info['message_text']}'\n\n"
-        f"User ID: {user_info['user_id']}\n"
-        f"Chat ID: {user_info['chat_id']}"
-    )
+    message = update.effective_message
+    if message.text:
+        print(message.text)
+        encoded_message = quote(message.text)
+        keyboard=[
+            [InlineKeyboardButton(
+                text="Access App below",
+                web_app=WebAppInfo(url=AUMI_URL + "?message=" + encoded_message)
+            )]
+        ]
+        await update.message.reply_text(
+            text=f"I've received your message: '{message.text}'",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    elif message.location:
+        print(message.location)
+        await update.message.reply_text(
+            f"I've received your location: '{message.location}'"
+        )
+    else:
+        print(message)
+        update.message.reply_text(
+            f"I've received something else: '{message}'"
+        )
+
 
 async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle incoming location messages"""
-    user_info = await get_user_info(update, context)
+    user_info = get_user_info(update, context)
     location = update.message.location
+    print(location)
     await update.message.reply_text(
         f"I've received your location!\n\n"
         f"Latitude: {location.latitude}\n"
@@ -122,50 +130,24 @@ async def handle_location(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         f"Chat ID: {user_info['chat_id']}"
     )
 
-def setup_telegram_bot() -> Application:
-    if not TELEGRAM_BOT_TOKEN:
-        raise ValueError("Telegram bot token not found. Make sure TELEGRAM_BOT_TOKEN is set in your .env file.")
-    
-    application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(MessageHandler(filters.LOCATION, handle_location))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    bot.run_webhook( #event based instead of polling
-            listen="0.0.0.0",
-            port=8443,
-            url_path=TELEGRAM_BOT_TOKEN,
-            webhook_url=f"{WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}"
-    )
-    return application
+# def set_webhook():
+#     # TelegramBot.delete_webhook()  # Clean previous webhooks
+#     TelegramBot.bot.set_webhook(
+#         url=WEBHOOK_URL,
+#         secret_token=TELEGRAM_BOT_TOKEN,
+#         max_connections=40
+#     )
 
+bot = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+global TelegramBot
+TelegramBot = bot
 
-@app.route('/api/validate', methods=['POST'])
-def validate_webapp():
-    """API endpoint to validate Telegram Mini App data and return user info"""
-    data = request.json
-    if not data or 'initData' not in data:
-        return ApiResponse(400, "missing initData", {})
-    init_data = data['initData']
-    
-    # Validate the data
-    if not validate_telegram_webapp_data(init_data):
-        return ApiResponse(403, "missing initData", {})
-    
-    # Parse user data from initData
-    init_data_dict = dict(parse_qsl(init_data))
-    user_data = json.loads(init_data_dict.get('user', '{}'))
-    
-    user_id = user_data.get('id')
-    if not user_id:
-        return jsonify({"error": "User ID not found in initData"}), 400
-    
-    # Get additional user info from our store if available
-    stored_user_data = user_data_store.get(user_id, {})
-    
-    # Merge data from initData with our stored data
-    combined_user_data = {**user_data, **stored_user_data}
-    
-    return jsonify({
-        "success": True,
-        "userData": combined_user_data
-    })
+if __name__ == "__main__":
+    try:
+        bot.add_handler(CommandHandler("start", start_command))
+        bot.add_handler(MessageHandler(filters.LOCATION, handle_location))
+        bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        bot.run_polling()
+    except (KeyboardInterrupt, SystemExit):
+        logger.error("Bot has been stopped")
+    # application.bot.set_webhook(f"{WEBHOOK_URL}/{TELEGRAM_BOT_TOKEN}")

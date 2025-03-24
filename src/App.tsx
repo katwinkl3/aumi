@@ -1,20 +1,25 @@
 import { useEffect, useState } from 'react'
 import './App.css'
 import WebApp from '@twa-dev/sdk'
-import {APIProvider, Map, AdvancedMarker, Pin} from '@vis.gl/react-google-maps';
+import {APIProvider, Map} from '@vis.gl/react-google-maps'; // , AdvancedMarker, Pin
 import {LoadingSpinner, ErrorMessage} from './components/elements';
 WebApp.ready();
 
-// let map: google.maps.Map;
-// async function initMap(): Promise<void> {
-//   const { Map } = await google.maps.importLibrary("maps") as google.maps.MapsLibrary;
-//   map = new Map(document.getElementById("map") as HTMLElement, {
-//     center: { lat: -34.397, lng: 150.644 },
-//     zoom: 8,
-//   });
-// }
-
-// initMap();
+interface PlaceInfo {
+  Id: string;
+  Name: string;
+  Address: string;
+  Lat: number;
+  Long: number;
+  Status: string;
+  Rating: number | null;
+  RatingCount: number | null;
+  PriceLevel: string | null;
+  OpeningHours: Record<string, any> | null;
+  Website: string | null;
+  GoogleLink: string | null;
+  DirectionLink: string | null;
+}
 
 function App() {
   const [loading, setLoading] = useState(true);
@@ -22,37 +27,54 @@ function App() {
   const [firstName, setFirstName] = useState<string | null>(null);
   const [url, setUrl] = useState<string>("");
   const [gToken, setGtoken] = useState<string | null>(null); // Initialize state
-  const [scrapedText, setScrapedText] = useState<string | null>(null); // Initialize state  
-  const [locations, setLocations] = useState<{ lat: number; lng: number }[]>([]);
+  const [places, setPlaces] = useState<PlaceInfo[]>([]);
+  // const [locations, setLocations] = useState<{ lat: number; lng: number }[]>([]);
   // const [count] = useState(0)
   // const [userData, setUserData]=useState<UserData | null>(null);
   // const [message, setMessage] = useState("");
   // const [buttonText, setButtonText] = useState<string>("Your text will appear here"); // Stores button text
 
-  const Domain = "http://localhost:5000"
-  const ScrapperPath = "/scrapper"
+  const Domain = "http://127.0.0.1:5000"
+  const ScrapperPath = "/test_scrapper"
   // init tele + gmaps
+
+  // let map: google.maps.Map;
+  // async function initMap(): Promise<void> {
+  //   const { Map } = await google.maps.importLibrary("maps") as google.maps.MapsLibrary;
+  //   const bounds = new google.maps.LatLngBounds();
+  //   places.forEach(place => {
+  //     bounds.extend({ lat: place.Lat, lng: place.Long });
+  //   });
+  //   map = new Map(document.getElementById("map") as HTMLElement, {
+  //     center: bounds.getCenter(),
+  //     zoom: 12,
+  //   });
+  // }
   
   // Fetch user data from backend
   useEffect(() => {
       setLoading(true);
       setError(null);
+      const urlParams = new URLSearchParams(window.location.search);
+      const messageParam = urlParams.get('message');
+      if (messageParam) {
+        console.log("messageParam", messageParam);
+        setUrl(decodeURIComponent(messageParam));
+      }
       try{
         fetch(Domain+"/google_token")
-        .then((res) => res.json())
-        .then((data) => setGtoken(data.key));
-        setFirstName(WebApp.initDataUnsafe.user?.first_name || null)
+        .then((res) => res.text())
+        .then((text) => setGtoken(text || ""));
+        console.log("WebApp.initDataUnsafe", WebApp.initDataUnsafe);
+        console.log("WebApp.initDataUnsafe.user", WebApp.initDataUnsafe.user);
+        setFirstName(WebApp.initDataUnsafe.user?.first_name || null);
+        console.log("WebApp.initDataUnsafe.start_param", WebApp.initDataUnsafe.start_param);
+        setUrl(WebApp.initDataUnsafe.start_param || "");
       } catch (err) {
         console.error('Error fetching user data:', err);
         setError('Failed to load user data. Please try again.');
-      } finally {
-        setLoading(false);
       }
-      
-    // if (WebApp.initDataUnsafe.user) {
-    //   setUserData(WebApp.initDataUnsafe.user as UserData);
-    //   console.log(userData);
-    // }
+      setLoading(false);
   }, []);
 
   // fetchAddress sends url to /scrapper to fetch addresses
@@ -76,8 +98,11 @@ function App() {
     }
     const resp = await fetch(Domain+ScrapperPath+`?url=${encodeURIComponent(url)}`);
     const data = await resp.json();
-    setScrapedText(data.text);
-    // setButtonText(url); // Update button text when Enter is pressed
+    if (Array.isArray(data)) {
+      setPlaces(data);
+    } else {
+      setPlaces([]);
+    }
   }
   
   const fetchInfoEnter = async (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -99,38 +124,22 @@ function App() {
     return pattern.test(str);
   }
 
-  // google map api
-  const generateLocations = async () => {
-
-  }
-
-  // 
-  // const sendMessageToBot = async () => {
-  //   if (!message.trim()) return;
-    
-  //   await fetch("http://localhost:5000/echo", {
-  //     method: "POST",
-  //     headers: { "Content-Type": "application/json" },
-  //     body: JSON.stringify({ userId: userData?.id, text: message }),
-  //   });
-
-  //   // window.Telegram.WebApp.sendEvent("web_app_data_send", { message });
-  //   setMessage(""); // Clear input
-  // };
 
   return (
     <div style={{
       display: "flex",
       flexDirection: "column",
       alignItems: "center",
-      justifyContent: setScrapedText != null ? "flex-end" : "center",
+      justifyContent: places.length > 0 ? "flex-end" : "center",
       height: "100vh",
       padding: 20,
     }}>
       {
         loading ? (<LoadingSpinner message="Loading your information..." />) :
         error ? (<ErrorMessage message={error} />) :
+        url != "" ? (<h1>Url found {url}</h1>) :
         <div className="card"> 
+        <h1>Welcome {firstName}</h1>
         <input
           type="text" placeholder="Enter Url" value={url} onKeyDown={fetchInfoEnter} onChange={(e) => setUrl(e.target.value)}
           style={{ padding: 10, width: "80%", marginBottom: 10 }}
@@ -143,16 +152,16 @@ function App() {
             Show Alert
         </button> */}
         {/* <button onClick={sendMessageToBot}>Send to Bot</button> */}
-        {gToken != null && scrapedText != null &&
-          <APIProvider apiKey={""}>
+        {gToken != null && places.length > 0 &&
+          <APIProvider apiKey={gToken}>
             <Map
-            style={{width: '100vw', height: '100vh'}}
-            defaultCenter={{lat: 22.54992, lng: 0}}
-            defaultZoom={10}
-            gestureHandling={'greedy'}
-            disableDefaultUI={true}
-            reuseMaps={true}
-          />
+              style={{width: '100vw', height: '100vh'}}
+              defaultCenter={{lat: places[0].Lat, lng: places[0].Long}}
+              defaultZoom={10}
+              gestureHandling={'greedy'}
+              disableDefaultUI={true}
+              reuseMaps={true}
+            />
           </APIProvider>
         }
       </div>}
