@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import './App.css'
 import WebApp from '@twa-dev/sdk'
-import {APIProvider, Map} from '@vis.gl/react-google-maps'; // , AdvancedMarker, Pin
+import {APIProvider, Map, AdvancedMarker, Pin, InfoWindow} from '@vis.gl/react-google-maps';
 import {LoadingSpinner, ErrorMessage} from './components/elements';
 WebApp.ready();
 
@@ -38,18 +38,148 @@ function App() {
   const ScrapperPath = "/test_scrapper"
   // init tele + gmaps
 
-  // let map: google.maps.Map;
-  // async function initMap(): Promise<void> {
-  //   const { Map } = await google.maps.importLibrary("maps") as google.maps.MapsLibrary;
-  //   const bounds = new google.maps.LatLngBounds();
-  //   places.forEach(place => {
-  //     bounds.extend({ lat: place.Lat, lng: place.Long });
-  //   });
-  //   map = new Map(document.getElementById("map") as HTMLElement, {
-  //     center: bounds.getCenter(),
-  //     zoom: 12,
-  //   });
-  // }
+  const LocationMap = ({ locations }: { locations: PlaceInfo[]}) => {
+    if (locations.length == 0 || gToken == null) {
+      setError("No locations found or no google maps token");
+      return
+    }
+    const [activeMarker, setActiveMarker] = useState<number | null>(null);
+
+    // Get average of all locations
+    const calculateCenter = (locations: PlaceInfo[]) => {
+      if (locations.length === 0) return { lat: 0, lng: 0 };
+      
+      const sum = locations.reduce(
+        (acc, loc) => ({
+          lat: acc.lat + loc.Lat,
+          lng: acc.lng + loc.Long
+        }),
+        { lat: 0, lng: 0 }
+      );
+      
+      return {
+        lat: sum.lat / locations.length,
+        lng: sum.lng / locations.length
+      };
+    }
+    const handleRedirect = (url?: string) => {
+      if (url != "") {
+        window.open(url, '_blank', 'noopener,noreferrer');
+      }
+    };
+    return <APIProvider apiKey={gToken}>
+      <div style={{ height: '100vh', width: '100%' }}>
+      <Map
+        mapId="60d59c6481bdec7c"
+        style={{width: '100vw', height: '100vh'}}
+        defaultCenter={calculateCenter(locations)} // TODO: change to average of all location
+        defaultZoom={12}
+        gestureHandling={'greedy'}
+        disableDefaultUI={true}
+        reuseMaps={true}
+        mapTypeControl={true}
+        streetViewControl={true}
+        fullscreenControl={true}
+      >
+      {locations.map((location, index) => (
+        console.log("location", location),
+        <React.Fragment key={index}>
+          <AdvancedMarker
+            key={index}
+            position={{ lat: location.Lat, lng: location.Long}}
+            title={location.Name}
+            onClick={() => setActiveMarker(index)}
+          >
+            <Pin
+              background={activeMarker === index ? '#FF0000' : '#22ccff'}
+              borderColor={'#1e89a1'}
+              glyphColor={'#0f677a'}
+            />
+          </AdvancedMarker>
+          {activeMarker === index && (
+            <InfoWindow
+              position={{ lat: location.Lat, lng: location.Long }}
+              onCloseClick={() => setActiveMarker(null)}
+            >
+              <div style={{ padding: '12px',
+                color: '#333',
+                fontFamily: 'Arial, sans-serif'
+              }}>
+                <h3 style={{ marginTop: '0 0 8px 0', color: '#222' }}>{location.Name}</h3>
+                <p>{location.Address}</p>
+                ${location.Status != "OPERATIONAL" ? `<p>Permanently Closed</p>`: ``}
+                ${location.Rating != null ? `<p>Rating: ${location.Rating}</p>` : ``}
+                ${location.RatingCount != null ? `<p>Rating Count: ${location.RatingCount}</p>` : ``}
+                ${location.PriceLevel != null ? `<p>Price Level: ${location.PriceLevel}</p>` : ``}
+                ${location.OpeningHours != null ? `<p>Opening Hours: ${location.OpeningHours}</p>` : ``}
+                {location?.Website && (
+                      <button
+                        onClick={() => handleRedirect(location.Website||"")}
+                        style={{
+                          padding: '6px 12px',
+                          backgroundColor: '#4285F4',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '14px'
+                        }}
+                      >
+                        Visit Website
+                      </button>
+                )}
+                {location.GoogleLink && (
+                      <button
+                        onClick={() => handleRedirect(location.GoogleLink||"")}
+                        style={{
+                          padding: '6px 12px',
+                          backgroundColor: '#4285F4',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '14px'
+                        }}
+                      >
+                        View on Google Maps
+                      </button>
+                )}
+                {location.DirectionLink && (
+                      <button
+                        onClick={() => handleRedirect(location.DirectionLink||"")}
+                        style={{
+                          padding: '6px 12px',
+                          backgroundColor: '#4285F4',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          fontSize: '14px'
+                        }}
+                      >
+                        Get Directions
+                      </button>
+                )}
+                </div>
+            </InfoWindow>
+          )}
+        </React.Fragment>
+        ))}
+        </Map>
+      </div>
+    </APIProvider>
+}
+
+const handleMapError = async (): Promise<void> => {
+  const mapElement = document.getElementById('map');
+  if (mapElement) {
+    mapElement.innerHTML = 
+      '<div style="text-align:center; padding:20px;">' +
+      '<h3>Error loading Google Maps</h3>' +
+      '<p>Please check your API key and internet connection.</p>' +
+      '</div>';
+  }
+}
   
   // Fetch user data from backend
   useEffect(() => {
@@ -80,9 +210,11 @@ function App() {
   // fetchAddress sends url to /scrapper to fetch addresses
   const fetchInfo = async () => {
     if (!isValidHttpUrl(url)){
+      console.log("Invalid URL", url);
       new Notification("Invalid URL", { body: "Not a valid url" });
     }
     var matches = url.match(/^https?\:\/\/([^\/?#]+)(?:[\/?#]|$)/i);
+    // todo: invalid url match no notification
     var domain = matches && matches[1];
     switch (domain) {
       case "vt.tiktok.com":
@@ -137,7 +269,7 @@ function App() {
       {
         loading ? (<LoadingSpinner message="Loading your information..." />) :
         error ? (<ErrorMessage message={error} />) :
-        url != "" ? (<h1>Url found {url}</h1>) :
+        // url != "" ? (<h1>Url found {url}</h1>) :
         <div className="card"> 
         <h1>Welcome {firstName}</h1>
         <input
@@ -153,16 +285,7 @@ function App() {
         </button> */}
         {/* <button onClick={sendMessageToBot}>Send to Bot</button> */}
         {gToken != null && places.length > 0 &&
-          <APIProvider apiKey={gToken}>
-            <Map
-              style={{width: '100vw', height: '100vh'}}
-              defaultCenter={{lat: places[0].Lat, lng: places[0].Long}}
-              defaultZoom={10}
-              gestureHandling={'greedy'}
-              disableDefaultUI={true}
-              reuseMaps={true}
-            />
-          </APIProvider>
+          <LocationMap locations={places} />
         }
       </div>}
     </div>
