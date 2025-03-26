@@ -26,8 +26,11 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [firstName, setFirstName] = useState<string | null>(null);
   const [url, setUrl] = useState<string>("");
-  const [gToken, setGtoken] = useState<string | null>(null); // Initialize state
+  const [gToken, setGtoken] = useState<string | null>(null);
   const [places, setPlaces] = useState<PlaceInfo[]>([]);
+  const [travelData, setTravelData] = useState<Record<string, any>>({});
+  const [displayTravelTime, setDisplayTravelTime] = useState(false);
+  const [activeMarker, setActiveMarker] = useState<number | null>(null);
   // const [locations, setLocations] = useState<{ lat: number; lng: number }[]>([]);
   // const [count] = useState(0)
   // const [userData, setUserData]=useState<UserData | null>(null);
@@ -36,14 +39,26 @@ function App() {
 
   const Domain = "http://127.0.0.1:5000"
   const ScrapperPath = "/test_scrapper"
+  const DirectionPath = "/direction"
   // init tele + gmaps
+
+  const fetchTravelTime = async (locationId: string) => {
+    if (travelData[locationId]) return; // Already cached
+    try {
+      // const response = await fetch(`${Domain+DirectionPath}?id=${locationId}`);
+      // const data = await response.json();
+      const data = {duration: 10, distance: 10};
+      setTravelData(prev => ({ ...prev, [locationId]: data }));
+    } catch (error) {
+      console.error('Failed to fetch travel time:', error);
+    }
+  };
 
   const LocationMap = ({ locations }: { locations: PlaceInfo[]}) => {
     if (locations.length == 0 || gToken == null) {
       setError("No locations found or no google maps token");
       return
     }
-    const [activeMarker, setActiveMarker] = useState<number | null>(null);
 
     // Get average of all locations
     const calculateCenter = (locations: PlaceInfo[]) => {
@@ -72,7 +87,7 @@ function App() {
       <Map
         mapId="60d59c6481bdec7c"
         style={{width: '100vw', height: '100vh'}}
-        defaultCenter={calculateCenter(locations)} // TODO: change to average of all location
+        defaultCenter={calculateCenter(locations)}
         defaultZoom={12}
         gestureHandling={'greedy'}
         disableDefaultUI={true}
@@ -81,6 +96,25 @@ function App() {
         streetViewControl={true}
         fullscreenControl={true}
       >
+         <div style={{
+          position: 'absolute',
+          top: 10,
+          left: '50%',
+          transform: 'translateX(-50%)',
+          zIndex: 1,
+          backgroundColor: 'white',
+          color: '#333',
+          padding: '8px 12px',
+          borderRadius: '4px',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          border: '1px solid #dadce0'
+        }} onClick={() => setDisplayTravelTime(!displayTravelTime)}>
+          Display Travel Time
+        </div>
       {locations.map((location, index) => (
         console.log("location", location),
         <React.Fragment key={index}>
@@ -89,78 +123,72 @@ function App() {
             position={{ lat: location.Lat, lng: location.Long}}
             title={location.Name}
             onClick={() => setActiveMarker(index)}
+            // onMouseEnter={() => setActiveMarker(index)}
+            // onMouseLeave={() => setActiveMarker(null)} // if using, fix mouseleave
           >
             <Pin
               background={activeMarker === index ? '#FF0000' : '#22ccff'}
               borderColor={'#1e89a1'}
               glyphColor={'#0f677a'}
             />
-          </AdvancedMarker>
+          </AdvancedMarker> // todo - if address is wrong, allow edit
           {activeMarker === index && (
             <InfoWindow
-              position={{ lat: location.Lat, lng: location.Long }}
+              position={{ lat: location.Lat, lng: location.Long }} //todo box is too huge, covers other markers, stick to one side
+              //todo after zooming in or dragging around, clicking on marker undoes zoom/ dragging
               onCloseClick={() => setActiveMarker(null)}
             >
               <div style={{ padding: '12px',
                 color: '#333',
-                fontFamily: 'Arial, sans-serif'
+                width: 250,
               }}>
-                <h3 style={{ marginTop: '0 0 8px 0', color: '#222' }}>{location.Name}</h3>
-                <p>{location.Address}</p>
-                ${location.Status != "OPERATIONAL" ? `<p>Permanently Closed</p>`: ``}
-                ${location.Rating != null ? `<p>Rating: ${location.Rating}</p>` : ``}
-                ${location.RatingCount != null ? `<p>Rating Count: ${location.RatingCount}</p>` : ``}
-                ${location.PriceLevel != null ? `<p>Price Level: ${location.PriceLevel}</p>` : ``}
-                ${location.OpeningHours != null ? `<p>Opening Hours: ${location.OpeningHours}</p>` : ``}
-                {location?.Website && (
-                      <button
-                        onClick={() => handleRedirect(location.Website||"")}
-                        style={{
-                          padding: '6px 12px',
-                          backgroundColor: '#4285F4',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '4px',
-                          cursor: 'pointer',
-                          fontSize: '14px'
-                        }}
-                      >
-                        Visit Website
-                      </button>
-                )}
-                {location.GoogleLink && (
-                      <button
-                        onClick={() => handleRedirect(location.GoogleLink||"")}
-                        style={{
-                          padding: '6px 12px',
-                          backgroundColor: '#4285F4',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '4px',
-                          cursor: 'pointer',
-                          fontSize: '14px'
-                        }}
-                      >
-                        View on Google Maps
-                      </button>
-                )}
-                {location.DirectionLink && (
-                      <button
-                        onClick={() => handleRedirect(location.DirectionLink||"")}
-                        style={{
-                          padding: '6px 12px',
-                          backgroundColor: '#4285F4',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '4px',
-                          cursor: 'pointer',
-                          fontSize: '14px'
-                        }}
-                      >
-                        Get Directions
-                      </button>
-                )}
+                <h3 style={{ marginTop: '0 0 8px 0', color: '#222', fontSize: 16 }}>{location.Name}</h3>
+                <p style={{ margin: '0 0 8px 0', fontSize: 14 }}>{location.Address}</p>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <div>
+                    {location.Status != "OPERATIONAL" ? `<p>Permanently Closed</p>`: ``}
+                    <span style={{ color: '#FFA500' }}>{'★'.repeat(Math.floor(location.Rating||0))}</span>
+                    <span style={{ color: '#CCCCCC' }}>{'★'.repeat(5 - Math.floor(location.Rating||0))}</span>
+                    <span style={{ marginLeft: 4 }}>({location.RatingCount||0})</span>
+                  </div>
+                  {location?.DirectionLink && 
+                    <a href={location.DirectionLink} style={{ textDecoration: 'none' }}>
+                    <div style={{ display: 'flex', alignItems: 'center' }}>
+                      <span style={{ marginRight: 4 }}>🚗</span>
+                      <span>Directions</span>
+                    </div>
+                  </a>
+                  }
                 </div>
+                {location?.GoogleLink && 
+                  <a href={location.GoogleLink} style={{ display: 'block', margin: '8px 0' }}>
+                    View on Google
+                  </a>
+                }
+                {location?.Website && 
+                  <a href={location.Website} style={{ display: 'block', margin: '8px 0' }}>
+                    Visit Website
+                  </a>
+                }
+                ${location.PriceLevel != null ? `<p>Price Level: ${location.PriceLevel}</p>` : ``} //todo change display
+                ${location.OpeningHours != null ? `<p>Opening Hours: ${location.OpeningHours}</p>` : ``} // todo change display
+              </div>
+              {displayTravelTime && (
+                <div style={{ 
+                  marginTop: '12px',
+                  paddingTop: '12px',
+                  borderTop: '1px solid #eee'
+                }}>
+                  {travelData[locations[activeMarker].Id] ? (
+                    <div style={{ color: '#333'}}>
+                      <p>Travel Time: {travelData[locations[activeMarker].Id].duration}</p>
+                      <p>Distance: {travelData[locations[activeMarker].Id].distance}</p>
+                    </div>
+                  ) : (
+                    <p>Loading travel data...</p>
+                  )}
+                </div>
+              )}
             </InfoWindow>
           )}
         </React.Fragment>
@@ -206,6 +234,13 @@ const handleMapError = async (): Promise<void> => {
       }
       setLoading(false);
   }, []);
+
+  useEffect(() => {
+    if (displayTravelTime && activeMarker !== null) {
+      const locationId = places[activeMarker].Id;
+      fetchTravelTime(locationId);
+    }
+  }, [displayTravelTime, activeMarker]);
 
   // fetchAddress sends url to /scrapper to fetch addresses
   const fetchInfo = async () => {
