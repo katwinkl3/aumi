@@ -55,8 +55,8 @@ def get_test_scrapper():
 @app.route('/scrapper', methods=["GET", "POST"])
 # @sleep_and_retry
 # @limits(calls=1, period=60) #todo - supposedly doesnt work quite well, but im not expecting massive traffic so... DEFERRED
-# @lru_cache(maxsize=256)
-def scrape_address() -> Response: #todo fix the response() return with jsonify and change fe to match
+@lru_cache(maxsize=256) #todo switch to redis cache for production
+def scrape_address() -> Response: #todo find type to match
     '''
     scrapes html from url in query string, and retrieves all address strings from html
     '''
@@ -67,7 +67,7 @@ def scrape_address() -> Response: #todo fix the response() return with jsonify a
     response = requests.get(url, headers=headers)
     if not response.ok:
         logger.error(f"failed to fetch webpage, err = {response.text}")
-        return Response(response.status_code, "failed to retrieve page", {})
+        return jsonify({"error": "failed to retrieve page"}), response.status_code
     soup = BeautifulSoup(response.text, 'html.parser')
     response.close()
     text = "\n".join([text.strip() for text in soup.stripped_strings])
@@ -76,9 +76,11 @@ def scrape_address() -> Response: #todo fix the response() return with jsonify a
     print("address", address)
     result = generate_markers(address)
     print("result", result)
-    return Response(200, "success", result)
+    # Convert PlaceInfo objects to dictionaries
+    result_dicts = [vars(place) for place in result]
+    return jsonify(result_dicts), 200
 
-def generate_address(text: str) -> Dict[str, List[str]]: #todo more address than needed is fetched in https://www.lemon8-app.com/@quinnelovv/7227439546152272385?region=sg do some parsing for websites
+def generate_address(text: str) -> Dict[str, List[str]]: #todo more address than needed is fetched in https://www.lemon8-app.com/@quinnelovv/7227439546152272385?region=sg do some parsing for websites, find a prompt that generates the top relevant ones
     '''
     model parses html text and returns json containing address information
     '''
