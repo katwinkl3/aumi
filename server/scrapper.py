@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 from ratelimit import limits, sleep_and_retry
 from threading import Thread
 from flask_socketio import SocketIO
-import googlemaps
+import itertools
 
 logging.basicConfig(
     format="{asctime} - {levelname} - {message}",
@@ -22,13 +22,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-CORS(app)
-
-# try:
-#     gmaps = googlemaps.Client(key=GOOGLE_TOKEN)
-# except Exception as error:
-#     logger.error(f"failed to initialize google maps, err = {error}")
-#     raise
+CORS(app, resources={
+    r"/*": {
+        "origins": ["https://aumi-gamma.vercel.app"],
+        "methods": ["GET", "POST", "OPTIONS"],
+        "allow_headers": ["Content-Type", "ngrok-skip-browser-warning"]
+    }
+})
 
 PremiumUser = True
 
@@ -71,7 +71,7 @@ def scrape_address() -> Response: #todo find type to match
     soup = BeautifulSoup(response.text, 'html.parser')
     response.close()
     text = "\n".join([text.strip() for text in soup.stripped_strings])
-    address = generate_address(text)
+    address = generate_address_from_model(text)
     logger.info("generated information = {address}")
     print("address", address)
     result = generate_markers(address)
@@ -80,7 +80,7 @@ def scrape_address() -> Response: #todo find type to match
     result_dicts = [vars(place) for place in result]
     return jsonify(result_dicts), 200
 
-def generate_address(text: str) -> Dict[str, List[str]]: #todo more address than needed is fetched in https://www.lemon8-app.com/@quinnelovv/7227439546152272385?region=sg do some parsing for websites, find a prompt that generates the top relevant ones
+def generate_address_from_model(text: str) -> Dict[str, List[str]]: #todo more address than needed is fetched in https://www.lemon8-app.com/@quinnelovv/7227439546152272385?region=sg do some parsing for websites, find a prompt that generates the top relevant ones
     '''
     model parses html text and returns json containing address information
     '''
@@ -122,8 +122,19 @@ def generate_markers(addressStruct: Dict[str, List[str]]) -> List[PlaceInfo]:
             address_info.append(info)
     return address_info
 
-def map_info(address: str) -> Optional[PlaceInfo]:
-    fields = ','.join(PlaceSearchFieldsNew_Free + PlaceSearchFieldsNew_Basic + (PlaceSearchFieldsNew_Premium if PremiumUser else []))
+@app.route('/single_address', methods=["GET", "POST"])
+def generate_single_address() -> Response:
+    address = request.args.get('address')
+    print("address", address)
+    if not address:
+        return jsonify({"error": "address is required"}), 400
+    res = map_info(address)
+    print("res", res)
+    return jsonify(res), 200
+
+def map_info(address: str, mode: str = 2) -> Optional[PlaceInfo]:
+    allowed_fields = [PlaceSearchFieldsNew_Free, PlaceSearchFieldsNew_Basic, PlaceSearchFieldsNew_Premium][:mode]
+    fields = ','.join(list(itertools.chain(*allowed_fields)))
     detail_params = {
         "textQuery": address
     }
