@@ -3,7 +3,7 @@ import './App.css'
 import WebApp from '@twa-dev/sdk'
 import {APIProvider, Map, AdvancedMarker, Pin, MapCameraChangedEvent, MapEvent} from '@vis.gl/react-google-maps';
 import {Drawer, RatingGroup, CloseButton, VStack, Box, Text, Flex, Button, HStack, Icon, Accordion, ChakraProvider,
-   defaultSystem, Spinner, Center, Input, InputGroup, SegmentGroup, Editable, IconButton,} from '@chakra-ui/react'
+   defaultSystem, Spinner, Center, SegmentGroup, Editable, IconButton, Span} from '@chakra-ui/react'
 import { toaster, Toaster } from './components/ui/toaster';
 import { Polyline } from './components/ui/polyline';
 import { FiNavigation, FiGlobe, FiMapPin, FiClock, FiCheck } from 'react-icons/fi';
@@ -67,7 +67,7 @@ function App() {
   // const [travelData, setTravelData] = useState<Record<string, any>>({});
  
 
-  const Domain = "https://ea09-116-88-198-238.ngrok-free.app"//"http://127.0.0.1:5000"
+  const Domain = "https://43a1-2406-3003-2005-5c1e-2939-fe8d-eed-9457.ngrok-free.app"//"http://127.0.0.1:5000"
   const ScrapperPath = "/scrapper"
   const DirectionAPI = "https://routes.googleapis.com/directions/v2:computeRoutes"
   const AddressPath = "/single_address"
@@ -81,12 +81,15 @@ function App() {
       setUrl(decodeURIComponent(messageParam));
     }
     try{
-      fetch(Domain+"/google_token", {
-        headers: { //todo: remove headers
-        'ngrok-skip-browser-warning': 'skip',
-      }})
-      .then((res) => res.text())
-      .then((text) => setGtoken(text || ""));
+      // fetch google token only if google token is empty
+      if (gToken == null) {
+        fetch(Domain+"/google_token", {
+          headers: { //todo: remove headers
+          'ngrok-skip-browser-warning':'skip',
+        }})
+        .then((res) => res.json())
+        .then((text) => setGtoken(text.token || ""));
+      }
       // console.log("WebApp.initDataUnsafe", WebApp.initDataUnsafe);
       // console.log("WebApp.initDataUnsafe.user", WebApp.initDataUnsafe.user);
       setFirstName(WebApp.initDataUnsafe.user?.first_name || null);
@@ -364,9 +367,9 @@ const fetchTravelTime = async (idx: number) => {
   });
   const data = await resp.json();
   console.log("data: ", data);
-  if (!resp.ok) {
+  if ((!resp.ok || !data || !data['routes'])){
     toaster.create({
-      title: 'Location could not be fetched from google maps',
+      title: 'Directions could not be fetched from google maps',
       description: data.error, //todo: block from user
       type: 'error',
       duration: 5000,
@@ -433,12 +436,6 @@ const fetchTravelTime = async (idx: number) => {
     // todo: invalid url match no notification
     var domain = matches && matches[1];
     switch (domain) {
-      case "vt.tiktok.com":
-        toaster.create({
-          title: 'Invalid URL', description: "cant handle tiktok videos yet", type: 'warning', duration: 5000,
-        });
-        setLoading(false);
-        return
       case "youtu.be":
         toaster.create({
           title: 'Invalid URL', description: "cant handle youtube videos yet", type: 'warning', duration: 5000,
@@ -453,31 +450,39 @@ const fetchTravelTime = async (idx: number) => {
         return
       default:
     }
-    const resp = await fetch(Domain+ScrapperPath+`?url=${encodeURIComponent(url)}`, {
-      headers: { //todo: remove headers
-      'ngrok-skip-browser-warning': 'skip',
-    }});
-    if (!resp.ok) {
-      const errorData: ScrapperErrorResponse = await resp.json();
-      toaster.create({
-        title: '500', description: errorData.error, type: 'error', duration: 5000,
-      });
-      setLoading(false);
-      return;
-    }
-    const data = await resp.json();
-    if (Array.isArray(data)) {
+    try {
+      const resp = await fetch(Domain+ScrapperPath+`?url=${encodeURIComponent(url)}`, {
+        headers: { //todo: remove headers
+        'ngrok-skip-browser-warning': 'skip',
+      }});
+      if (!resp.ok) {
+        const errorData: ScrapperErrorResponse = await resp.json();
+        toaster.create({
+          title: '500', description: errorData.error, type: 'error', duration: 5000,
+        });
+        setLoading(false);
+        return;
+      }
+      const data = await resp.json();
+      if (!Array.isArray(data)){
+        toaster.create({
+          title: '500', description: "empty response", type: 'error', duration: 5000,
+        });
+        setPlaces([]);
+        return;
+      }
       setPlaces(data);
       setNewCenter(initializeCenter(data));
       // setNewBounds(initializeBounds(data));
       setNewZoom(calculateZoom(data));
-    } else {
+    } catch (error) {
+      console.log("error: ", error);
       toaster.create({
-        title: '500', description: "empty response", type: 'error', duration: 5000,
+        title: '500', description: "unknown error", type: 'error', duration: 5000,
       });
-      setPlaces([]);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   }
   
   const fetchInfoEnter = async (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -647,28 +652,31 @@ const fetchTravelTime = async (idx: number) => {
                     </Box>
                   </Drawer.Header>
                   <Drawer.CloseTrigger asChild>
-                    <CloseButton size="sm" colorScheme="white" onClick={() => setShowInfo(false)}/>
+                    <CloseButton size="sm" bg="white" onClick={() => setShowInfo(false)}/>
                   </Drawer.CloseTrigger>
                   <Drawer.Body>
                     <HStack gap={4} mb={4}>
                       {location.DirectionLink && 
-                        <Button colorScheme="blue.500" rounded="full" flex="1" asChild>
+                        <Button bg="blue.500" rounded="full" flex="1" asChild>
                           <a href={location.DirectionLink ?? ""} target="_blank" rel="noopener noreferrer">
-                            <FiNavigation/> Directions
+                            <FiNavigation color='white'/>
+                            <Span color={"white"}>Directions</Span>
                           </a>
                         </Button>
                       }
                       {location.GoogleLink && 
                         <Button variant="outline" rounded="full" flex="1" asChild>
                           <a href={location.GoogleLink ?? ""} target="_blank" rel="noopener noreferrer">
-                            <FaMapMarkedAlt /> View on Google
+                            <FaMapMarkedAlt color='blue.500'/>
+                            <Span color={"blue.500"}>View on Google</Span>
                           </a>
                         </Button>
                       }
                       {location.Website && 
                         <Button variant="outline" rounded="full" flex="1" asChild>
                           <a href={location.Website ?? ""} target="_blank" rel="noopener noreferrer">
-                            <FiGlobe /> Website
+                            <FiGlobe color='blue.500'/>
+                            <Span color={"blue.500"}>Website</Span>
                           </a>
                         </Button>
                       }
@@ -679,15 +687,22 @@ const fetchTravelTime = async (idx: number) => {
                         <Text color="gray.500">{location.Address}</Text>
                       </Flex>
                       <Flex align="center">
-                        <Icon as={FiClock} mr={2} color="gray.500" />
                         {location.OpeningHours?.openNow !== undefined && 
-                          <Accordion.Root collapsible bg="white">
-                            <Accordion.Item value={location.OpeningHours?.openNow ? "Open Now" : "Closed"}>
-                              <Accordion.ItemTrigger>
+                          <Accordion.Root collapsible>
+                            <Accordion.Item key={0} value={""}> 
+                              {/* location.OpeningHours?.openNow ? "Open Now" : "Closed" */}
+                              <Accordion.ItemTrigger bg={"white"}>
+                                <Icon as={FiClock} mr={2} color="gray.500" />
+                                <Span flex="1" color={location.OpeningHours?.openNow ? "green" : "red"}>{location.OpeningHours?.openNow ? "Open Now" : "Closed"}</Span>
                                 <Accordion.ItemIndicator />
                               </Accordion.ItemTrigger>
                               <Accordion.ItemContent>
-                                <Accordion.ItemBody color="gray.500">{location.OpeningHours?.weekdayDescriptions.join("\n")}</Accordion.ItemBody>
+                                <Accordion.ItemBody color="gray.500">
+                                  {location.OpeningHours?.weekdayDescriptions.map((day: string, index: number) => (
+                                    <Text key={index}>{day}</Text>
+                                  ))}
+                                  {/* {location.OpeningHours?.weekdayDescriptions.join("\n")} */}
+                                </Accordion.ItemBody>
                               </Accordion.ItemContent>
                             </Accordion.Item>
                           </Accordion.Root>
@@ -701,14 +716,14 @@ const fetchTravelTime = async (idx: number) => {
                         </Flex>
                       }
                       <HStack gap={2}>
-                        <Button colorScheme="red.500" rounded="full" flex="1" asChild>
+                        <Button bg={"blue.500"} rounded="full" flex="1" asChild>
                           <a href="#" data-disabled="" onClick={() => deleteLocation(index)}>
-                            {"Delete"}
+                            <Span color="white">Delete</Span>
                           </a>
                         </Button>
-                        <Button colorScheme="blue.500" rounded="full" flex="1" asChild>
+                        <Button bg="blue.500" rounded="full" flex="1" asChild>
                           <a href="#" data-disabled="" onClick={() => editLocation(index)}>
-                              {"Edit"}
+                            <Span color="white">Edit</Span>
                           </a>
                         </Button>
                       </HStack>

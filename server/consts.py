@@ -11,6 +11,11 @@ GOOGLE_TOKEN = os.getenv("GOOGLE_TOKEN")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 AUMI_URL = os.getenv("AUMI_URL")
+TIKTOK_PHOTO_URL = os.getenv("TIKTOK_PHOTO_URL")
+TIKTOK_PHOTO_REFERER_URL = os.getenv("TIKTOK_PHOTO_REFERER_URL")
+TIKTOK_VIDEO_URL = os.getenv("TIKTOK_VIDEO_URL")
+
+timeout = 10
 
 @dataclass
 class PlaceInfo:
