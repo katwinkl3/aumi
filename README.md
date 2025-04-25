@@ -12,15 +12,16 @@ Aumi takes an url and renders on a map, the list of locations found on the page.
 
 ## Todo
 
-- <s>Add traffic navigation - get users current location</s>
-- <s>Adopt proper compoenents from chakra<s>
-- <s>Allow edits to user location</s>
-- <s>Add video and image parsing</s> Note that this will not work on videos with no captions/ descriptions, and the accuracy for photo ocr is limited
-- Integrate (properly) with telegram chat
-- omg the phone ui looks so bad
-- Register user info + save chat data
+- ~~Add traffic navigation - get users current location~~
+- ~~Adopt proper compoenents from chakra~~
+- ~~Allow edits to user location~~
+- ~~Add video and image parsing~~ Note! will not work on videos with no captions/descriptions, and the accuracy for photo ocr is limited atm
+- ~~Integrate with telegram as web app bot~~
+- Omg the phone ui looks so bad - migrate to shardcn(?)
 - Add proper non-local cache for scrapper calls
-- Add rate limiter
+- Add rate limiter and quota
+- Deploy
+- Register user info + save chat data
 - Add tests
 - Set up dark and light mode
 
