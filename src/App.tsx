@@ -53,6 +53,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [firstName, setFirstName] = useState<string | null>(null);
   const [url, setUrl] = useState<string>("");
+  const [teleUrl, setTeleUrl] = useState<string>("");
   const [gToken, setGtoken] = useState<string | null>(null);
   const [places, setPlaces] = useState<PlaceInfo[]>([]);
   const [activeMarker, setActiveMarker] = useState<number | null>(null);
@@ -62,6 +63,7 @@ function App() {
   const [transportMode, setTransportMode] = useState<"TRANSIT" | "DRIVE">("TRANSIT");
   const [directionData, setDirectionData] = useState<DirectionInfo | null>(null);
   const [showInfo, setShowInfo] = useState(false);
+  const [lastFetchTime, setLastFetchTime] = useState<number>(0);
   // const [newBounds, setNewBounds] = useState<google.maps.LatLngBoundsLiteral>();
   // const [userData, setUserData]=useState<UserData | null>(null);
   // const [travelData, setTravelData] = useState<Record<string, any>>({});
@@ -101,7 +103,7 @@ function App() {
     const urlParams = new URLSearchParams(window.location.search);
     const messageParam = urlParams.get('message');
     if (messageParam) {
-      setUrl(decodeURIComponent(messageParam));
+      setTeleUrl(decodeURIComponent(messageParam).trim());
     }
     try{
       // console.log("WebApp.initDataUnsafe", WebApp.initDataUnsafe);
@@ -124,7 +126,7 @@ function App() {
 
   // Triggers fetching of place info when url is updated
   useEffect(() => {
-    if (!url) return;
+    if (!teleUrl) return;
     setLoading(true);
     const loadPlaces = async () => {
       try {
@@ -142,7 +144,7 @@ function App() {
       }
     }
     loadPlaces();
-  }, [url]);
+  }, [teleUrl]);
 
   const isMobile = Math.min(window.screen.width, window.screen.height) < 768 || navigator.userAgent.indexOf("Mobile") > -1;
 
@@ -458,17 +460,37 @@ const fetchTravelTime = async (idx: number) => {
 }
   // fetchAddress sends url to /scrapper to fetch addresses
   const fetchInfo = async () => {
+    // Rate limiting logic
+    const now = Date.now();
+    const cooldownPeriod = 3 * 1000; // 10 seconds in milliseconds
+    const urlParam = teleUrl || url.trim();
+    
+    // Check cooldown period
+    if (now - lastFetchTime < cooldownPeriod) {
+      toaster.create({
+        title: 'Request too frequent',
+        description: `Please wait before retrying`,
+        type: 'warning',
+        duration: 5000,
+      });
+      return;
+    }
+    
+    // Update rate limit tracking
+    setLastFetchTime(now);
     setLoading(true);
-    if (!isValidHttpUrl(url)){
-      console.log("Invalid URL", url);
+    if (!isValidHttpUrl(urlParam)){
+      console.log("Invalid URL", urlParam);
       toaster.create({
         title: '400',
         description: 'Not a valid url.',
         type: 'error',
         duration: 5000,
       });
+      setLoading(false);
+      return;
     }
-    var matches = url.match(/^https?\:\/\/([^\/?#]+)(?:[\/?#]|$)/i);
+    var matches = urlParam.match(/^https?\:\/\/([^\/?#]+)(?:[\/?#]|$)/i);
     // todo: invalid url match no notification
     var domain = matches && matches[1];
     switch (domain) {
@@ -487,10 +509,17 @@ const fetchTravelTime = async (idx: number) => {
       default:
     }
     try {
-      const resp = await fetch(Domain+ScrapperPath+`?url=${encodeURIComponent(url)}`, {
+      const resp = await fetch(Domain+ScrapperPath+`?url=${encodeURIComponent(urlParam)}`, {
         headers: { //todo: remove headers
         'ngrok-skip-browser-warning': 'skip',
       }});
+      if (resp.status === 429) {
+        toaster.create({
+          title: 'Rate Limit Exceeded', description: "Please try again later", type: 'error', duration: 5000,
+        });
+        setLoading(false);
+        return;
+      }
       if (!resp.ok) {
         const errorData: ScrapperErrorResponse = await resp.json();
         toaster.create({
@@ -522,7 +551,7 @@ const fetchTravelTime = async (idx: number) => {
   }
   
   const fetchInfoEnter = async (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
+    if (e.nativeEvent.key == "Enter") {
       fetchInfo()
     }
   };
@@ -657,6 +686,7 @@ const fetchTravelTime = async (idx: number) => {
               setShowInfo(false);
               setDirectionData(null);
               setUrl("");
+              setTeleUrl("");
             }}
             colorScheme="blue"
             size={isMobile ? "sm" : "md"}

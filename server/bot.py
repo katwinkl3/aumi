@@ -94,7 +94,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     message = update.effective_message
     if message.text:
         print(message.text)
-        encoded_message = quote(message.text)
+        encoded_message = quote(message.text.strip())
         keyboard=[
             [InlineKeyboardButton(
                 text="Access App below",

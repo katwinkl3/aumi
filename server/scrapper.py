@@ -13,6 +13,8 @@ from typing import Dict, List, Tuple, Any, Optional
 from ratelimit import limits, sleep_and_retry
 from threading import Thread
 from flask_socketio import SocketIO
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 import itertools
 import hashlib
 import redis
@@ -52,6 +54,11 @@ logger.addHandler(console_handler)
 app = Flask(__name__)
 app.config['REDIS_URL'] = 'redis://localhost:6379/0'
 app.redis = redis.Redis.from_url(app.config['REDIS_URL'])
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    default_limits=["10 per day", "1 per hour"]
+)
 
 
 CORS(app, resources={
@@ -281,6 +288,7 @@ def handle_website(url):
     return result, None
 
 @app.route('/scrapper', methods=["GET", "POST"])
+@limiter.limit("1 per minute") 
 # @sleep_and_retry
 # @lru_cache(maxsize=256) #lru local cache on top of redis caching
 def scrape_address() -> Response:
