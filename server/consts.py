@@ -16,6 +16,7 @@ TIKTOK_PHOTO_REFERER_URL = os.getenv("TIKTOK_PHOTO_REFERER_URL")
 TIKTOK_VIDEO_URL = os.getenv("TIKTOK_VIDEO_URL")
 
 timeout = 10
+redis_expiry = 60*60*24
 
 @dataclass
 class PlaceInfo:

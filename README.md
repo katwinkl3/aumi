@@ -4,21 +4,27 @@ Aumi takes an url and renders on a map, the list of locations found on the page.
 1. Input the website/tiktok/rednote link
 <img src="./docs/demo1.png" alt="drawing" width="400"/>
 
-2. Map renders the locations found on the page
+2. Map renders the locations found on the page (tiktok photos/videos, blogposts etc)
 <img src="./docs/demo2.png" alt="drawing" width="400"/>
 
 3. Address and direction info are rendered by clicking on the location
 <img src="./docs/demo3.png" alt="drawing" width="400"/>
 
-## Todo
+## How does it work
+1. Scrape the page for either its html (blogposts), audio captions (videoes), or image captures (photos)
+2. Name and address information are extracted from the scraped data using chatgpt
+3. Location and shop information is queried from google maps
+4. Locations along with travelling instructions (if location access is enabled) are then rendered on a google map
+5. Caching with redis is implemented for /scrapper to reduce api calls to openai and google maps
 
+## Todo
 - ~~Add traffic navigation - get users current location~~
 - ~~Adopt proper compoenents from chakra~~
 - ~~Allow edits to user location~~
 - ~~Add video and image parsing~~ Note! will not work on videos with no captions/descriptions, and the accuracy for photo ocr is limited atm
 - ~~Integrate with telegram as web app bot~~
+- ~~Add non-local cache for scrapper calls~~
 - Omg the phone ui looks so bad - migrate to shardcn(?)
-- Add proper non-local cache for scrapper calls
 - Add rate limiter and quota
 - Deploy
 - Register user info + save chat data

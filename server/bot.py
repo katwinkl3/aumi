@@ -102,7 +102,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )]
         ]
         await update.message.reply_text(
-            text=f"I've received your message: '{message.text}'",
+            text=f"Access the web app below: '{message.text}'",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     elif message.location:
@@ -113,7 +113,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     else:
         print(message)
         update.message.reply_text(
-            f"I've received something else: '{message}'"
+            f"Unable to process message:'{message}'"
         )
 
 

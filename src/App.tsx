@@ -6,7 +6,7 @@ import {Drawer, RatingGroup, CloseButton, VStack, Box, Text, Flex, Button, HStac
    defaultSystem, Spinner, Center, SegmentGroup, Editable, IconButton, Span} from '@chakra-ui/react'
 import { toaster, Toaster } from './components/ui/toaster';
 import { Polyline } from './components/ui/polyline';
-import { FiNavigation, FiGlobe, FiMapPin, FiClock, FiCheck } from 'react-icons/fi';
+import { FiNavigation, FiGlobe, FiMapPin, FiClock, FiCheck, FiArrowLeft } from 'react-icons/fi';
 import { FaMapMarkedAlt } from 'react-icons/fa';
 // import {decode} from '@googlemaps/polyline-codec';
 
@@ -65,41 +65,28 @@ function App() {
   // const [newBounds, setNewBounds] = useState<google.maps.LatLngBoundsLiteral>();
   // const [userData, setUserData]=useState<UserData | null>(null);
   // const [travelData, setTravelData] = useState<Record<string, any>>({});
- 
 
   const Domain = "https://43a1-2406-3003-2005-5c1e-2939-fe8d-eed-9457.ngrok-free.app"//"http://127.0.0.1:5000"
   const ScrapperPath = "/scrapper"
   const DirectionAPI = "https://routes.googleapis.com/directions/v2:computeRoutes"
   const AddressPath = "/single_address"
-  // Initialize : fetch user and url data from telegram
+
+  // fetch google token if null
   useEffect(() => {
+    if (gToken != null) return; 
     setLoading(true);
-    const urlParams = new URLSearchParams(window.location.search);
-    const messageParam = urlParams.get('message');
-    if (messageParam) {
-      console.log("messageParam from telegram", decodeURIComponent(messageParam));
-      setUrl(decodeURIComponent(messageParam));
-    }
     try{
-      // fetch google token only if google token is empty
-      if (gToken == null) {
-        fetch(Domain+"/google_token", {
-          headers: { //todo: remove headers
-          'ngrok-skip-browser-warning':'skip',
-        }})
-        .then((res) => res.json())
-        .then((text) => setGtoken(text.token || ""));
-      }
-      // console.log("WebApp.initDataUnsafe", WebApp.initDataUnsafe);
-      // console.log("WebApp.initDataUnsafe.user", WebApp.initDataUnsafe.user);
-      setFirstName(WebApp.initDataUnsafe.user?.first_name || null);
-      // console.log("WebApp.initDataUnsafe.start_param", WebApp.initDataUnsafe.start_param);
-      setUrl(WebApp.initDataUnsafe.start_param || "");
+      fetch(Domain+"/google_token", {
+        headers: {
+        'ngrok-skip-browser-warning':'skip',
+      }})
+      .then((res) => res.json())
+      .then((text) => setGtoken(text.token || ""));
     } catch (err) {
-      console.error('Error fetching user data:', err);
+      console.error('Error fetching Google Maps API key:', err);
       toaster.create({
         title: '500',
-        description: 'Failed to load user data. Please try again.',
+        description: 'Failed to load Google Maps API key, err: ' + err,
         type: 'error',
         duration: 5000,
       });
@@ -107,6 +94,55 @@ function App() {
       setLoading(false);
     }
   }, []);
+
+  // fetch telegram information (user info, location, url)
+  useEffect(() => {
+    setLoading(true);
+    const urlParams = new URLSearchParams(window.location.search);
+    const messageParam = urlParams.get('message');
+    if (messageParam) {
+      setUrl(decodeURIComponent(messageParam));
+    }
+    try{
+      // console.log("WebApp.initDataUnsafe", WebApp.initDataUnsafe);
+      // console.log("WebApp.initDataUnsafe.user", WebApp.initDataUnsafe.user);
+      setFirstName(WebApp.initDataUnsafe.user?.first_name || null);
+      // console.log("WebApp.initDataUnsafe.start_param", WebApp.initDataUnsafe.start_param);
+      // setUrl(WebApp.initDataUnsafe.start_param || "");
+    } catch (err) {
+      console.error('Error fetching user data:', err);
+      toaster.create({
+        title: '500',
+        description: 'Failed to load user data. Err= '+ err,
+        type: 'error',
+        duration: 5000,
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Triggers fetching of place info when url is updated
+  useEffect(() => {
+    if (!url) return;
+    setLoading(true);
+    const loadPlaces = async () => {
+      try {
+        await fetchInfo();
+      } catch (err) {
+        console.error('Error fetching user data:', err);
+        toaster.create({
+          title: '500',
+          description: 'Failed to load locations. Err= '+ err,
+          type: 'error',
+          duration: 5000,
+        });
+      } finally {
+        setLoading(false);
+      }
+    }
+    loadPlaces();
+  }, [url]);
 
   const isMobile = Math.min(window.screen.width, window.screen.height) < 768 || navigator.userAgent.indexOf("Mobile") > -1;
 
@@ -567,12 +603,34 @@ const fetchTravelTime = async (idx: number) => {
     //   }
     // }
 
+    // const editable = useEditable({
+    //   defaultValue: "Click to edit",
+      
+    // })
+
     return(
     <APIProvider apiKey={gToken}>
-      <div style={{ height: '100vh', width: '100%' }}>
+      <div style={{ 
+         height: '100vh', 
+         width: '100vw', 
+         position: 'fixed',
+         top: 0,
+         left: 0,
+         right: 0,
+         bottom: 0,
+         overflow: 'hidden'
+       }}>
       <Map
         mapId="60d59c6481bdec7c"
-        style={{width: '100vw', height: '100vh'}}
+        style={{
+          width: '100%', 
+          height: '100%',
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0
+        }}
         defaultCenter={newCenter}
         defaultZoom={newZoom}
         // defaultBounds={newBounds}
@@ -586,7 +644,37 @@ const fetchTravelTime = async (idx: number) => {
         streetViewControl={true}
         fullscreenControl={true}
       >
-        <HStack position="absolute" top={10} left="50%" transform="translateX(-50%)" zIndex={1} gap={2}>
+        <Box 
+          position="absolute" 
+          bottom={isMobile ? 20 : 30} 
+          left={isMobile ? 10 : 20} 
+          zIndex={10}
+        >
+          <Button
+            onClick={() => {
+              setPlaces([]);
+              setActiveMarker(null);
+              setShowInfo(false);
+              setDirectionData(null);
+              setUrl("");
+            }}
+            colorScheme="blue"
+            size={isMobile ? "sm" : "md"}
+            boxShadow="md"
+          >
+            <FiArrowLeft/>
+            Back
+          </Button>
+        </Box>
+        
+        <HStack 
+          position="absolute" 
+          top={isMobile ? 5 : 10} 
+          left="50%" 
+          transform="translateX(-50%)" 
+          zIndex={1} 
+          gap={2}
+        >
           <SegmentGroup.Root defaultValue={transportMode === "TRANSIT" ? "Public Transport" : "Driving"} onValueChange={(details) => {
             const mode = details.value === "Public Transport" ? "TRANSIT" : "DRIVE";
             setTransportMode(mode);
@@ -595,20 +683,22 @@ const fetchTravelTime = async (idx: number) => {
             <SegmentGroup.Items items={["Public Transport", "Driving"]}/>
           </SegmentGroup.Root>
           {/* wrap editable in a box that fits it exactly and set background color */}
-          <Box bg="grey" p={1} borderRadius="md" opacity={0.5}>
-            <Editable.Root defaultValue="Double click to add/edit current location" opacity={1}
-              activationMode="dblclick" onValueCommit={(details) => editUserLocation(details.value!)}>
-              <Editable.Preview/>
-              <Editable.Input/>
+          {/* <Box bg="grey" p={1} borderRadius="md" opacity={0.5}> */}
+            <Editable.Root defaultValue="Edit current location" opacity={0.8}
+              bg={"white"}
+              // onFocusOutside={(e) => {}}
+              onValueCommit={(details) => editUserLocation(details.value!)}>
+              <Editable.Preview color={"black"}/>
+              <Editable.Input color={"black"}/>
               <Editable.Control>
-                <Editable.SubmitTrigger asChild>
-                <IconButton variant="outline" size="xs">
+                <Editable.SubmitTrigger color={"white"} asChild>
+                <IconButton variant="outline" size="xs" color={"white"} >
                   <FiCheck />
                 </IconButton>
               </Editable.SubmitTrigger>
               </Editable.Control>
             </Editable.Root>
-          </Box>
+          {/* </Box> */}
         </HStack>
       {locations.map((location, index) => (
         // console.log("location", location),
@@ -623,6 +713,7 @@ const fetchTravelTime = async (idx: number) => {
               background={activeMarker === index ? '#FF0000' : '#22ccff'}
               borderColor={'#1e89a1'}
               glyphColor={'#0f677a'}
+              scale={isMobile ? 0.6 : 1}
             />
           </AdvancedMarker> 
           {/* todo - if address is wrong, allow edit */}
@@ -743,7 +834,7 @@ const fetchTravelTime = async (idx: number) => {
           />
           }
           {userLocation != null && <AdvancedMarker position={{ lat: userLocation.lat, lng: userLocation.lng }}>
-            <Pin background="#e8e54a" borderColor="#7a792a" glyphColor="#0f677a" glyph={"𖨆"} />
+            <Pin background="#e8e54a" borderColor="#7a792a" glyphColor="#0f677a" glyph={"𖨆"} scale={isMobile ? 0.6 : 1} />
           </AdvancedMarker>}
         </React.Fragment>
         ))}
@@ -766,7 +857,7 @@ const fetchTravelTime = async (idx: number) => {
           padding: 20,
         }}>
           <div className="card"> 
-              <h1>Enter link below to begin {firstName}</h1>
+              <h1>{firstName ? "Hi "+firstName+',' : ""} Enter link below to begin</h1>
               <input
                 type="text" placeholder="Enter Url" value={url} onKeyDown={fetchInfoEnter} onChange={(e) => setUrl(e.target.value)}
                 style={{ padding: 10, width: "80%", marginBottom: 10 }}
