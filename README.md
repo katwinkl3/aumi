@@ -2,7 +2,7 @@
 
 AI-powered map assistant that automatically extracts and visualises the locations suggested in social media posts/websites (no more manual google map searches for the restaurants you find on tiktok)
 
-Aumi takes any blogpost/ tiktok phot/video url and renders on a map, the location data of destinations found in the input url. Useful for planning vacations, finding new restaurants in the area etc. Built with Flask, React, GPT-4 API integration, Telebot API and Google Maps API.
+Aumi takes any blogpost/ tiktok phot/video url and renders on a map, the location data of destinations found in the input url. Useful for planning vacations, finding new restaurants in the area etc. Built with Flask, React, GPT-4 API integration, Telebot API, and Google Maps API.
 
 1. Share the link directly to telegram chat bot Aumi and access the web app
 <img src="./docs/demo0.png" alt="drawing" width="400"/>
@@ -13,32 +13,46 @@ Aumi takes any blogpost/ tiktok phot/video url and renders on a map, the locatio
 3. Map renders the locations found on the page
 <img src="./docs/demo2.png" alt="drawing" width="400"/>
 
-4. Address and direction info are rendered by clicking on the location
-<img src="./docs/demo3.png" alt="drawing" width="400"/>
+4. Info such as description of the location from the source url, opening hours, direction info from current location etc are rendered by clicking on the location.
+<p float="left">
+  <img src="./docs/demo3.png" alt="drawing" width="400"/>
+  <img src="./docs/demo4.png" alt="drawing" width="400"/>
+  <p>
+    <em>Web app visualisation on the left, source information (tiktok video+caption) on the right</em>
+  </p>
+</p>
 
 ## How does it work
-1. Telegram bot receives the url link from user, and a scrapping strategy is chosen based on url domain
+1. Telegram bot receives the url link from user, and a scraping strategy is chosen based on url domain
 2. Page is scraped for either its html (blogposts), audio captions (videoes), or image captures (photos) using readability libraries
 3. Name and address information are extracted from the scraped data using LLM processing with the appropriate prompts
 4. Location and shop information is queried from google maps api
 5. Locations along with travelling instructions (if location access is enabled) are then rendered on a google map
-6. Caching with redis is implemented for /scrapper to reduce api calls to openai and google maps
+6. Caching with redis is implemented for /scraper to reduce api calls to openai and google maps
 7. Minimal rate limiting is implemented using flask-limiter, and some throttling logic is added in the frontend fetcher
 
+## Why is it useful
+1. Bot interface = no need to download apps (ideally the user has telegram)
+2. No existing apps with similar functions (that i can find)
+3. "Why not just search 'cafes near me' on googlemaps/ why not just ask chatgpt for recommendations": Many still rely on social media apps for direct recommendations and reviews
+
 ## Challenges in accurate address extraction:
-1. **Identifying core elements to extract:** Scrapped html from blog post websites might include irrelevant addresses from ads, previews from 'suggested relevant posts', and the comment section. It is important to identify which texts are not key components so to reduce false positives in the address list. 
-    1. **Removing boilerplate:** Extract key components using libraries like trafilatura or readability-lxml (preserves html), and fallback on soup.get_text() if extracted length is too short.
-    2. **Reducing token vs Losing dom tree information**: I flattened the html elements and scraped its text for a smaller input, but the hierarchy and styling of elements might actually provide context on .
-    3. **Adaptive scraping strategies**: I apply different scraping strategies on different platforms. For tiktok photos, images are scraped; for tiktok videos, captions and descriptions are scraped; for everything else, only text elements are scraped. If the input is an url from an unrecognised domain, key information might be lost.
-2. **Prompt engineering:** Prioritise precision at all cost - better to miss out some locations than to suggest something irrelevant
-    1. **Few-shot**: There are common patterns in social media posts for location recommendations, like '📍 address' or '1. address'
-    2. **Location inference**: Google APIs might pick up the wrong address for a place with multiple branches/ similar names, so it will help if the model can infer the country/ state that's being mentioned in the post. (Might increase the risk of false detection)
-    3. **Context-aware extraction**: Differentiate between locations that are actually being recommended vs locations that are mentioned in relation to something else (e.g. "unlike xxx, yyy is ...")
+1. **Identifying core elements to process:** Exclude irrelevant content and unrelated locations from the input sent to llm models
+    1. **Removing boilerplate:**  Scraped html might include irrelevant locations from ads, 'suggested relevant posts' previews, and the comment section. Extract key components using libraries like trafilatura or readability-lxml (preserves html), and fallback on soup.get_text() if extracted length is too short.
+    2. **Reducing token vs Losing dom tree information**: Flattened the html hierarchy by removing all tags other than bold and list as these might be a signal for location names
+    3. **Adaptive scraping**: Applied different scraping strategies for different domains. For photos, images are scraped; for tiktok videos, captions and descriptions are scraped; for everything else, only text elements are scraped. 
+        - Follow up problem: If the input is an url from an unrecognised domain, information in images/videos will be missed
+2. **Prompt engineering:** Prioritise precision at all cost - better to exclude some locations than to suggest something irrelevant
+    1. **Few-shot**: Make use of common patterns in social media posts for location recommendations, like '📍 xxx' or '1. xxx' to better identify location names in text
+    2. **Location inference**: Google APIs might pick up the wrong address for a place with multiple branches/ similar names, so it will help if the model can infer the country/area that the post is about. 
+        - Follow up problem: How do we verify if the inference is correct? 
+    3. **Multimodal text input**: When merging information from multiple media sources (audio transcript, textual captions, parsed images), priority is assigned to each so results are more reliable in the event that they 'contradict' (e.g. video caption contains one address of a marketplace + audio transcript about 7 stalls in that marketplace = confused model returning 8 locations)
 3. **Media processing accuracy:**
-    1. **Image processing with OCR** - Its hard to find a generic ocr setting/ preprocessing algorithm that can handle varying image quality/text overlay style/ background noisiness well. (Image sharpening sounds like a good idea for lower res images until the model sees a bowl of spaghetti in the background and spells uwu).
-    2. **Lack of real video scraping function**: So far I'm only parsing the audio captions and descriptions for videos. Actual video processing will require keyframe extraction + processing which might be computationally expensive and slow.
-    3. **Multimodal analysis** - How can we effectively integrate information from the text/video/image components on a single post?
-4. **Address validation:** There is no effective way to verify the extracted addresses; theres no fixed rule for location naming. Some ideas:
+    1. **Image processing with OCR** The following problems remain ~relatively~ unsolved:
+        1. Hard to find a generic ocr setting/ preprocessing algorithm that can handle varying image quality/text overlay style/ background noisiness well. (Image sharpening sounds like a good idea for lower res images until the model sees a bowl of spaghetti in the background and returns uwu). 
+        2. Texts from the menu/ packaging in the background become noise in ocr output
+    2. **Lack of real video scraping function**: For now I'm only parsing the audio captions and descriptions for videos. Actual video processing will require keyframe extraction + additional processing, which might be computationally expensive and slow.
+4. **Address validation:** Theres no effective way to verify the extracted addresses. Some ideas:
    1. **Cross-validation across models**: Engage different models, and only accept location names that appear in both (overkill)
    2. **Self-consistency check**: In a seperate prompt, ask for information like number of addresses, country/state, and check this against the previous generated list of output
    3. **Cross reference** - Reject location if it differs too much from the top result returned from google
@@ -49,10 +63,10 @@ Aumi takes any blogpost/ tiktok phot/video url and renders on a map, the locatio
 2. **Performance + security** (not a problem for now) - telegram chat and input validation, *rate limiting*, queuing requests (scrapper processing time is already quite long)
 
 ## Future features:
-1. List management - merge and organize maps generated from different but relevant urls (tiktoks for )
+1. List management - allow users to merge location lists generated from different urls under the same map view
 2. Expand with more information - restaurant deals/reservation availability etc
-3. Allow for collaborative edits (possibly shared across group chat with delta sync though its not very useful at this point)
-
+3. Allow for collaborative edits for group planning
+4. Support for other languages + maps (amap for cn, kakao map for kr)
 
 ## Todo
 - ~~Add traffic navigation - get users current location~~
@@ -62,8 +76,28 @@ Aumi takes any blogpost/ tiktok phot/video url and renders on a map, the locatio
 - ~~Integrate with telegram as web app bot~~
 - ~~Add non-local cache for scrapper calls~~
 - ~~Add rate limiter and quota~~
+- ~~Add location description from source url~~
+- ~~Have different prompts for different scraping strategy~~
 - Omg the phone ui looks so bad - migrate to shardcn(?)
 - Deploy
 - Register user info + save chat data
 - Add tests
 - Set up dark and light mode
+
+## Appendix
+
+#### Overt vs subtle ads on websites
+Soft ads cant be identified by readability (since it is sponsored content maybe we should leave it be?)
+<img src="./docs/annex1.png" alt="drawing" width="400"/>
+
+#### Model hallucination
+If the input text has unbalanced content for the locations (a whole paragraph on one but only listing the names of the others), the model will hallucinate similar description for all. Prompt was changed to allow for empty results to avoid this
+<img src="./docs/annex3.png" alt="drawing" width="400"/>
+
+#### Noisy backgrounds
+Better preprocessing needed for messy backgrounds
+<img src="./docs/annex4.png" alt="drawing" width="400"/>
+
+#### Scrambled texts
+Pretty impressive that the model can still understand 'pickled quail eggs' as one sentence despite the text being scrambled (ocr setting changed to paragraph=True to avoid this)
+<img src="./docs/annex2.png" alt="drawing" width="400"/>

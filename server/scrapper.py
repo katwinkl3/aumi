@@ -5,6 +5,8 @@ from bot import TelegramBot
 from bs4 import BeautifulSoup
 from openai import OpenAI
 import requests
+import trafilatura
+from readability import Document
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from functools import lru_cache
 import sys
@@ -19,7 +21,7 @@ import itertools
 import hashlib
 import redis
 import json
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 from urllib.request import Request, urlopen
 import easyocr
 import pytesseract
@@ -74,6 +76,7 @@ def hewwo():
     return str(TelegramBot == None)
 
 @app.route('/google_token', methods=["GET", "POST"])
+@limiter.limit("60 per minute") 
 def get_google_token():
     return generate_response({"token": GOOGLE_TOKEN}, 200)
 
@@ -165,7 +168,7 @@ def extract_text_from_url(image_url):
     dilated = cv2.dilate(eroded, kernel, iterations=1)
     # EasyOCR
     reader = easyocr.Reader(['en'])
-    easyocr_results = reader.readtext(dilated, detail=0)
+    easyocr_results = reader.readtext(dilated, paragraph=True, detail=0)
     easyocr_text = " ".join(easyocr_results)
     return easyocr_text
 
@@ -177,35 +180,36 @@ def handle_tiktok_photo(tiktok_url):
     print("extracting text from tiktok photo", tiktok_url)
     url = TIKTOK_PHOTO_URL
     headers = {
-        'accept': 'application/json, text/plain, */*',
-        'accept-language': 'en-GB,en-US;q=0.9,en;q=0.8',
-        'content-type': 'application/json',
-        'origin': TIKTOK_PHOTO_URL,
+        'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+        'origin': TIKTOK_PHOTO_ORIGIN_URL,
         'priority': 'u=1, i',
         'referer': TIKTOK_PHOTO_REFERER_URL,
         'user-agent': 'Mozilla/5.0'
     }
-    payload = {
-        "query": tiktok_url,
-        "language_id": "1"
-    }
-    data, err = fetch_website(url=url, headers=headers, method="POST", params=payload, timeout=timeout)
+    payload = "q="+quote(tiktok_url, safe='') + "&lang=en&cftoken="
+    data, err = fetch_website(url=url, headers=headers, method="POST", params=payload, timeout=timeout, is_html=False)
     if err != None:
         return None, err
-    soup = BeautifulSoup(data, 'html.parser')   
+    soup = BeautifulSoup(data['data'], 'html.parser')
+    res = ""
+    caption = soup.find('h3')
+    if caption != None:
+        res += ("caption: "+caption.text+'\n')
     urls = []
-    for a_tag in soup.find_all('a', href=True):
-        link = a_tag['href']
-        if 'tiktokcdn' in link and link[-8:] == "sc=image":
-            urls.append(a_tag['href'])
+    for img in soup.find_all('img'):
+        if img.get("alt") != 'savetik':
+            continue
+        link = img.get("src")
+        if 'tiktokcdn' in link:
+            urls.append(link)
     texts = []
     for image_url in urls:
         text = extract_text_from_url(image_url)
         texts.append(text)
-    result = '. '.join(texts)
-    logger.info(f"extracted text from tiktok photo: {result}")
-    print("extracted text from tiktok photo", result)
-    return result, None
+    res += '\n'.join(texts)
+    logger.info(f"extracted text from tiktok photo: {res}")
+    print("extracted text from tiktok photo", res)
+    return res, None
 
 # get subtitles and description from video if possible
 def handle_tiktok_video(tiktok_url):
@@ -224,9 +228,16 @@ def handle_tiktok_video(tiktok_url):
         return None, err
     subtitle = fetch_subtitles(data)
     description = fetch_descriptions(data['data'])
+    res = ''
+    if len(subtitle) > 0:
+        res += "audio: "+subtitle
+    if len(description) > 0:
+        if len(res) > 0:
+            res += "\n"
+        res += "caption: "+description
     logger.info(f"extracted subtitle: {subtitle}, description: {description}")
     print(f"extracted subtitle: {subtitle}, description: {description}")
-    return description + ' ' + subtitle, None
+    return res, None
  
 def fetch_descriptions(data):
     if not data or 'desc' not in data:
@@ -270,25 +281,54 @@ def handle_rednote_photo(url):
     for image_url in links:
         text = extract_text_from_url(image_url)
         texts.append(text)
-    result = '. '.join(texts)
+    result = desc + '. '.join(texts)
     logger.info(f"extracted text from rednote photo: {result}")
+    # todo - if fail, fall back on handle_website
     print("extracted text from rednote photo", result)
     return result, None
 
+def handle_lemon8(url):
+    logger.info(f"extracting text from lemon8 photo: {url}")
+    print("extracting text from lemon8 photo", url)
+    data, err = fetch_website(url=url)
+    if err != None:
+        return None, err
+    soup = BeautifulSoup(data, 'html.parser')
+    script_tag = soup.find_all('script', {'type': 'application/ld+json'})
+    json_data = json.loads(script_tag.string)
+    if 'image' in json_data:
+        images = [i['url'] for i in json_data['image']]
+
+def get_text_with_tags(soup, tags_to_keep=['b', 'li']):
+    for tag in soup.find_all(True):
+        if tag.name not in tags_to_keep:
+            tag.unwrap()  # Remove the tag but keep its content
+    return str(soup)
 
 # Handle normal (blog post) website data:
-
-def handle_website(url):
-    headers = {"User-Agent": "Mozilla/5.0"}
+def handle_website(url, headers: Optional[Dict[str, str]] = {"User-Agent": "Mozilla/5.0"}):
     data, err = fetch_website(url=url, headers=headers)
     if err != None:
         return None, err
-    soup = BeautifulSoup(response.text, 'html.parser')
-    result = "\n".join([text.strip() for text in soup.stripped_strings])
-    return result, None
+    # 1. readability
+    doc = Document(data)
+    soup = BeautifulSoup(doc.summary(), 'html.parser')
+    txt1 = get_text_with_tags(soup)
+    # 2. trafilatura
+    downloaded = trafilatura.fetch_url(url)
+    txt2 = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
+    # baseline = beautifulsoup
+    soup = BeautifulSoup(data, 'html.parser')
+    control = get_text_with_tags(soup)
+    if max(len(txt1), len(txt2)) < 2000 and len(control)/max(len(txt1), len(txt2)) >= 10: #
+        return doc.title() + "\n" + control
+    if len(txt1) > len(txt2):
+        return doc.title() + "\n" + txt1
+    return doc.title() + "\n" + txt2
+
 
 @app.route('/scrapper', methods=["GET", "POST"])
-@limiter.limit("1 per minute") 
+@limiter.limit("10 per minute") 
 # @sleep_and_retry
 # @lru_cache(maxsize=256) #lru local cache on top of redis caching
 def scrape_address() -> Response:
@@ -310,6 +350,7 @@ def scrape_address() -> Response:
         print("cache hit")
         return generate_response(cached_data, 200)
     res, err = None, None
+    prompt = WEBSITE_PROMPT
     # fetch from tiktok
     if parsed.netloc in ("vt.tiktok.com", "www.tiktok.com"):
         try:
@@ -323,13 +364,21 @@ def scrape_address() -> Response:
         media_type = check_tiktok_type(url)
         if media_type == 'photo':
             res, err = handle_tiktok_photo(url)
+            prompt=TIKTOK_PROMPT_IMAGE
         elif media_type =='video':
             res, err = handle_tiktok_video(url)
+            if len(res)>6 and res[:5] == "audio":
+                prompt=TIKTOK_PROMPT_AUDIO_CAPTION
+            else:
+                prompt=TIKTOK_PROMPT_CAPTION
         else:
             err = "tiktok post type cannot be identified"
     # fetch from rednote
     elif parsed.netloc == "www.xiaohongshu.com":
          res, err = handle_rednote_photo(url)
+    # fetch from lemon8
+    elif parsed.netloc == "www.lemon8-app.com": #todo: switch to lemon8 handler
+        res, err = handle_website(url, headers=None) #weird quirk
     # fetch from instagram or facebook
     elif parsed.netloc == "www.instagram.com" or parsed.netloc == "www.facebook.com":
         err = "instagram and facebook links are not supported" 
@@ -342,7 +391,7 @@ def scrape_address() -> Response:
         return generate_response({"error": f"failed to fetch from {url}, err={err}"}, 500)
     logger.info("text identified = {res}")
     print("text identified =", res)
-    address = generate_address_from_model(res)
+    address = generate_address_from_model(res, prompt)
     logger.info("generated information = {address}")
     print("address", address)
     result = generate_markers(address, 3)
@@ -382,7 +431,7 @@ def get_cache(key: str) -> Optional[Any]:
         print(f"Redis cache retrieval error: {str(e)}")
     return None
 
-def generate_address_from_model(text: str) -> Dict[str, List[str]]: #todo more address than needed is fetched in https://www.lemon8-app.com/@quinnelovv/7227439546152272385?region=sg do some parsing for websites, find a prompt that generates the top relevant ones
+def generate_address_from_model(text: str, prompt: str) -> Dict[str, List[str]]:
     '''
     model parses html text and returns json containing address information
     '''
@@ -393,10 +442,8 @@ def generate_address_from_model(text: str) -> Dict[str, List[str]]: #todo more a
         model="gpt-4o-mini",
         store=True,
         messages=[
-            { "role": "system", "content": "You are a helpful assistant. The following messages are scrapped from websites or video captions/audio that contains one or more location recommendations. Use your best discretion to discern which businesses are relevant, then extract their names and addresses. Return only a json map object with the business name as key, and a string array of addresses of that business as value (empty array if not found)." },
+            { "role": "system", "content": prompt },
             {"role": "developer", "content": text}
-            # todo - replace prompt and add hints e.g numbered point forms
-            # todo - focus on eliminating false positives - better exclude than to be wrong
         ]
     )
     resp = completion.choices[0].message.content
@@ -411,19 +458,36 @@ def generate_address_from_model(text: str) -> Dict[str, List[str]]: #todo more a
         raise
     return address
 
+def validate_place_info(place_info: Optional[PlaceInfo], name: str) -> bool:
+    if not place_info:
+        return False
+    # if place_info.Name not in name: #todo: come up with validation using more examples
+    #     return False
+    return True
+
 def generate_markers(addressStruct: Dict[str, List[str]], mode: int = 2) -> List[PlaceInfo]:
     '''
     takes address map and queries, for each address, its location information as defined by PlaceInfo
     '''
     address_info = []
-    for name, addresses in addressStruct.items():
-        if len(addresses) == 0:
-            addresses.append('')
-        for address in addresses:
-            info = map_info(name + " " + address, mode)
-            if not info:
-                continue
-            address_info.append(info)
+    address_check = True
+    for name, addresses_struct in addressStruct.items():
+        address_check &= ('address' in addresses_struct) # if some locations dont have addresses, treat all as noise
+    for name, addresses_struct in addressStruct.items():
+        addresses = []
+        location = name
+        if 'address' in addresses_struct:
+            addresses = addresses_struct['address']
+        if len(addresses) > 0 and address_check:
+            location += (' ' + addresses[0])
+        if 'area' in addresses_struct:
+            location += (' ' + addresses_struct['area'])
+        info = map_info(location, mode)
+        if not validate_place_info(info, name):
+            continue
+        if 'description' in addresses_struct:
+            info.Description = addresses_struct['description']
+        address_info.append(info)
     return address_info
 
 @app.route('/single_address', methods=["GET", "POST"])
@@ -479,7 +543,8 @@ def map_info(address: str, mode: int = 2) -> Optional[PlaceInfo]:
         OpeningHours=detail.get("currentOpeningHours",  None),
         Website=detail.get("websiteUri",  None),
         GoogleLink=detail.get("googleMapsLinks",  {}).get("placeUri", None),
-        DirectionLink=detail.get("googleMapsLinks",  {}).get("directionsUri", None)
+        DirectionLink=detail.get("googleMapsLinks",  {}).get("directionsUri", None),
+        Description=''
     )
 
 # def default_map_info(address: str) -> Optional[PlaceInfo]:

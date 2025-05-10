@@ -3,7 +3,7 @@ import './App.css'
 import WebApp from '@twa-dev/sdk'
 import {APIProvider, Map, AdvancedMarker, Pin, MapCameraChangedEvent, MapEvent} from '@vis.gl/react-google-maps';
 import {Drawer, RatingGroup, CloseButton, VStack, Box, Text, Flex, Button, HStack, Icon, Accordion, ChakraProvider,
-   defaultSystem, Spinner, Center, SegmentGroup, Editable, IconButton, Span} from '@chakra-ui/react'
+   defaultSystem, Spinner, Center, SegmentGroup, Editable, IconButton, Span, Blockquote} from '@chakra-ui/react'
 import { toaster, Toaster } from './components/ui/toaster';
 import { Polyline } from './components/ui/polyline';
 import { FiNavigation, FiGlobe, FiMapPin, FiClock, FiCheck, FiArrowLeft } from 'react-icons/fi';
@@ -32,6 +32,7 @@ interface PlaceInfo {
   Website: string | null;
   GoogleLink: string | null;
   DirectionLink: string | null;
+  Description: string | null;
 }
 
 interface DirectionInfo {
@@ -68,7 +69,7 @@ function App() {
   // const [userData, setUserData]=useState<UserData | null>(null);
   // const [travelData, setTravelData] = useState<Record<string, any>>({});
 
-  const Domain = "https://43a1-2406-3003-2005-5c1e-2939-fe8d-eed-9457.ngrok-free.app"//"http://127.0.0.1:5000"
+  const Domain = "https://caa0-2406-3003-2005-5c1e-34bd-3b9d-7747-1f10.ngrok-free.app"//"http://127.0.0.1:5000"
   const ScrapperPath = "/scrapper"
   const DirectionAPI = "https://routes.googleapis.com/directions/v2:computeRoutes"
   const AddressPath = "/single_address"
@@ -561,7 +562,7 @@ const fetchTravelTime = async (idx: number) => {
       '^(https?:\\/\\/)?' + // protocol
         '((([a-z\\d]([a-z\\d-]*[a-z\\d])*)\\.)+[a-z]{2,}|' + // domain name
         '((\\d{1,3}\\.){3}\\d{1,3}))' + // OR ip (v4) address
-        '(\\:\\d+)?(\\/[-a-z\\d%_.~+]*)*' + // port and path
+        '(\\:\\d+)?(\\/[-a-z\\d%_.~+@]*)*' + // port and path
         '(\\?[;&a-z\\d%_.~+=-]*)?' + // query string
         '(\\#[-a-z\\d_]*)?$', // fragment locator
       'i'
@@ -636,6 +637,25 @@ const fetchTravelTime = async (idx: number) => {
     //   defaultValue: "Click to edit",
       
     // })
+
+    const priceLevel = (str: string): string => {
+      if (str == "PRICE_LEVEL_FREE"){
+        return "Free"
+      } 
+      if (str == "PRICE_LEVEL_INEXPENSIVE"){
+        return "$"
+      } 
+      if (str == "PRICE_LEVEL_MODERATE"){
+        return "$$"
+      } 
+      if (str == "PRICE_LEVEL_EXPENSIVE"){
+        return "$$$"
+      } 
+      if (str == "PRICE_LEVEL_VERY_EXPENSIVE"){
+        return "$$$$"
+      } 
+      return ""
+    }
 
     return(
     <APIProvider apiKey={gToken}>
@@ -763,12 +783,12 @@ const fetchTravelTime = async (idx: number) => {
                           <RatingGroup.Control />
                         </RatingGroup.Root>
                         <Text fontSize="sm" color="gray.500" ml={1}>({location.RatingCount ? location.RatingCount : "N/A"})</Text>
+                        {location.PriceLevel != null && 
+                          <Text color="gray.500" fontSize="sm" ml={1}>{priceLevel(location.PriceLevel)}</Text>
+                        }
                       </Flex>
                       {places[activeMarker?? 0].Status != "OPERATIONAL" && 
                         <Text color="red">{location.Status}</Text>
-                      }
-                      {location.PriceLevel != null && 
-                        <Text color="gray.500" fontSize="sm" ml={1}>{location.PriceLevel}</Text>
                       }
                     </Box>
                   </Drawer.Header>
@@ -803,6 +823,13 @@ const fetchTravelTime = async (idx: number) => {
                       }
                     </HStack>
                     <VStack gap={3} align="stretch">
+                    {location.Description != null && location.Description.length > 0 &&
+                        <Blockquote.Root>
+                          <Blockquote.Content>
+                            <Text color="gray.500">{location.Description}</Text>
+                            </Blockquote.Content>
+                        </Blockquote.Root>
+                      }
                       <Flex align="center">
                         <Icon as={FiMapPin} mr={2} color="gray.500" />
                         <Text color="gray.500">{location.Address}</Text>
