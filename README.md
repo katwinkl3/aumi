@@ -16,7 +16,7 @@ Aumi takes any blogpost/ tiktok phot/video url and renders on a map, the locatio
 4. Info such as description of the location from the source url, opening hours, direction info from current location etc are rendered by clicking on the location.
 <p float="left">
   <img src="./docs/demo3.png" alt="drawing" width="400"/>
-  <img src="./docs/demo4.png" alt="drawing" width="400"/>
+  <img src="./docs/demo4.png" alt="drawing" width="200"/>
   <p>
     <em>Web app visualisation on the left, source information (tiktok video+caption) on the right</em>
   </p>
