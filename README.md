@@ -1,8 +1,6 @@
 # Mapping out website links with Aumi
 
-AI-powered map assistant that automatically extracts and visualises the locations suggested in social media posts/websites (no more manual google map searches for the restaurants you find on tiktok)
-
-Aumi takes any blogpost/ tiktok phot/video url and renders on a map, the location data of destinations found in the input url. Useful for planning vacations, finding new restaurants in the area etc. Built with Flask, React, GPT-4 API integration, Telebot API, and Google Maps API.
+AI-powered map assistant that automatically extracts and visualises the locations mentioned in social media posts/websites (no more manual google map searches for the restaurants you find on tiktok). Built with Flask, React, GPT-4 API integration, Telebot API, and Google Maps API.
 
 1. Share the link directly to telegram chat bot Aumi and access the web app
 <img src="./docs/demo0.png" alt="drawing" width="400"/>
@@ -15,26 +13,37 @@ Aumi takes any blogpost/ tiktok phot/video url and renders on a map, the locatio
 
 4. Info such as description of the location from the source url, opening hours, direction info from current location etc are rendered by clicking on the location.
 <p float="left">
-  <img src="./docs/demo3.png" alt="drawing" width="400"/>
-  <img src="./docs/demo4.png" alt="drawing" width="200"/>
+  <img src="./docs/demo3.png" alt="drawing" width="600"/>
+  <img src="./docs/demo4.png" alt="drawing" width="300"/>
   <p>
     <em>Web app visualisation on the left, source information (tiktok video+caption) on the right</em>
   </p>
 </p>
 
-## How does it work
-1. Telegram bot receives the url link from user, and a scraping strategy is chosen based on url domain
-2. Page is scraped for either its html (blogposts), audio captions (videoes), or image captures (photos) using readability libraries
-3. Name and address information are extracted from the scraped data using LLM processing with the appropriate prompts
-4. Location and shop information is queried from google maps api
-5. Locations along with travelling instructions (if location access is enabled) are then rendered on a google map
-6. Caching with redis is implemented for /scraper to reduce api calls to openai and google maps
-7. Minimal rate limiting is implemented using flask-limiter, and some throttling logic is added in the frontend fetcher
+## How it works
+1. Url link received (through telegram or UI input) is scraped for its html (blogposts), audio captions (videoes), or image captures (photos)
+2. Name, address, and description are extracted from the scraped data using LLM processing with the appropriate prompts
+3. Location information, and travelling instructions fom user's current location are queried from google maps api and rendered on a map component
+4. Redis caching, flask rate limiting + frontend throttling to reduce system load
 
 ## Why is it useful
 1. Bot interface = no need to download apps (ideally the user has telegram)
-2. No existing apps with similar functions (that i can find)
-3. "Why not just search 'cafes near me' on googlemaps/ why not just ask chatgpt for recommendations": Many still rely on social media apps for direct recommendations and reviews
+2. "Why not just search 'cafes near me' on google maps/ why not just ask chatgpt for recommendations": Many still rely on social media apps for direct recommendations and reviews
+
+## Ultimate vision: LLM orchestrated agentic workflow without predetermined structure
+Aumi's processes can be abstracted into a workflow comprising the following steps: 
+1. Domain-aware content retrieval <code>scraper(url) -> content</code>
+2. Address extractor  <code>extractor(text) -> []addresses</code>
+3. Location info retriever <code>address_info(address name) -> location object</code>
+4. map visualisation <code>renderer(coordinates) -> interactive component</code>
+Aumi initially ewxecuted this workflow through predetermined function calls. In an LLM-orchestrated architecture, these functions are MCP servers that the model can dynamically call. Rather than following predetermined workflows, the LLM acts as the orchestrator, selecting and sequencing appropriate MCP servers to fulfill requests. 
+
+In the following experiment, function 1 and 3 were made into independent MCP tools; when instructed to extract location details from cafes in the url, Claude was able to correctly execute this 3-step workflow with minimal prompting:
+
+<img src="./docs/demo5.png" alt="drawing" width="700"/>
+
+With the addition of more sophisticated MCP servers, its possible to extend the workflow to query for information like reservation availability (OpenTable MCP), ongoing promotions (website parsing MCP) etc. To achieve seamless app to app communication workflow, users can interact through any client interface (telegram webapp/web browsers/google map search bar) to trigger a call to the LLM orchestrator, instead of engaging directly with the model's chat interface.
+
 
 ## Challenges in accurate address extraction:
 1. **Identifying core elements to process:** Exclude irrelevant content and unrelated locations from the input sent to llm models
@@ -57,10 +66,9 @@ Aumi takes any blogpost/ tiktok phot/video url and renders on a map, the locatio
    2. **Self-consistency check**: In a seperate prompt, ask for information like number of addresses, country/state, and check this against the previous generated list of output
    3. **Cross reference** - Reject location if it differs too much from the top result returned from google
     
-
 ## Other considerations:
-1. **Cost efficiency** - things to consider: cache url -> placeInfo, swap to MapBox or try to integrate it w GMaps in the future
-2. **Performance + security** (not a problem for now) - telegram chat and input validation, *rate limiting*, queuing requests (scrapper processing time is already quite long)
+1. **Cost efficiency** - MapBox instead of GMaps
+2. **Performance + security** Telegram chat and input validation, *rate limiting*, queuing requests, parallelize ocr tasks
 
 ## Future features:
 1. List management - allow users to merge location lists generated from different urls under the same map view
@@ -74,7 +82,7 @@ Aumi takes any blogpost/ tiktok phot/video url and renders on a map, the locatio
 - ~~Allow edits to user location~~
 - ~~Add video and image parsing~~ Note! will not work on videos with no captions/descriptions, and the accuracy for photo ocr is limited atm
 - ~~Integrate with telegram as web app bot~~
-- ~~Add non-local cache for scrapper calls~~
+- ~~Add non-local cache for scraper calls~~
 - ~~Add rate limiter and quota~~
 - ~~Add location description from source url~~
 - ~~Have different prompts for different scraping strategy~~
@@ -88,16 +96,20 @@ Aumi takes any blogpost/ tiktok phot/video url and renders on a map, the locatio
 
 #### Overt vs subtle ads on websites
 Soft ads cant be identified by readability (since it is sponsored content maybe we should leave it be?)
+
 <img src="./docs/annex1.png" alt="drawing" width="400"/>
 
 #### Model hallucination
 If the input text has unbalanced content for the locations (a whole paragraph on one but only listing the names of the others), the model will hallucinate similar description for all. Prompt was changed to allow for empty results to avoid this
+
 <img src="./docs/annex3.png" alt="drawing" width="400"/>
 
 #### Noisy backgrounds
 Better preprocessing needed for messy backgrounds
+
 <img src="./docs/annex4.png" alt="drawing" width="400"/>
 
 #### Scrambled texts
 Pretty impressive that the model can still understand 'pickled quail eggs' as one sentence despite the text being scrambled (ocr setting changed to paragraph=True to avoid this)
+
 <img src="./docs/annex2.png" alt="drawing" width="400"/>

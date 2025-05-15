@@ -14,7 +14,6 @@ import logging
 from typing import Dict, List, Tuple, Any, Optional
 from ratelimit import limits, sleep_and_retry
 from threading import Thread
-from flask_socketio import SocketIO
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import itertools
@@ -268,7 +267,7 @@ def check_tiktok_type(url: str) -> str:
 
 # Handle rednote data:
 
-def handle_rednote_photo(url):
+def handle_rednote_photo(url) -> Tuple[Optional[str], Optional[str]]:
     logger.info(f"extracting text from rednote photo: {url}")
     print("extracting text from rednote photo", url)
     data, err = fetch_website(url=url)
@@ -321,36 +320,52 @@ def handle_website(url, headers: Optional[Dict[str, str]] = {"User-Agent": "Mozi
     soup = BeautifulSoup(data, 'html.parser')
     control = get_text_with_tags(soup)
     if max(len(txt1), len(txt2)) < 2000 and len(control)/max(len(txt1), len(txt2)) >= 10: #
-        return doc.title() + "\n" + control
+        return doc.title() + "\n" + control, None
     if len(txt1) > len(txt2):
-        return doc.title() + "\n" + txt1
-    return doc.title() + "\n" + txt2
+        return doc.title() + "\n" + txt1, None
+    return doc.title() + "\n" + txt2, None
 
+    
 
 @app.route('/scrapper', methods=["GET", "POST"])
 @limiter.limit("10 per minute") 
 # @sleep_and_retry
 # @lru_cache(maxsize=256) #lru local cache on top of redis caching
 def scrape_address() -> Response:
-    '''
-    handles urls based on its origin, and returns a list of PlaceInfo objects to display
-    '''
     url = request.args.get("url")
     if not url:
         return generate_response({"error": "URL is empty"}, 400)
-    parsed = urlparse(url)
-    if not all([parsed.scheme, parsed.netloc]):
-        return generate_response({"error": "Invalid URL format"}, 400)
-    print("requested url", url)
-    logger.info("requested url = {url}")
     cache_key = get_cache_key(url)
     cached_data = get_cache(cache_key)
     if cached_data:
         logger.info("cache hit")
         print("cache hit")
         return generate_response(cached_data, 200)
-    res, err = None, None
-    prompt = WEBSITE_PROMPT
+    scraped, prompt, err = scrape(url)
+    if err != None:
+        return generate_response({"error": err}, 400)
+    address = generate_address_from_model(scraped, prompt)
+    logger.info("generated information = {address}")
+    print("address", address)
+    result = generate_markers(address, 3)
+    logger.info("generated information = {address}")
+    print("result", result)
+    # Convert PlaceInfo objects to dictionaries
+    result_dicts = [vars(place) for place in result]
+    if len(result) > 0:
+        set_cache(cache_key, result_dicts)
+    return generate_response(result_dicts, 200)
+
+def scrape(url):
+    '''
+    adaptive scraping based on domain
+    '''
+    parsed = urlparse(url)
+    if not all([parsed.scheme, parsed.netloc]):
+        return "", "", "Invalid URL format"
+    print("requested url", url)
+    logger.info("requested url = {url}")
+    res, prompt, err = None, WEBSITE_PROMPT, None
     # fetch from tiktok
     if parsed.netloc in ("vt.tiktok.com", "www.tiktok.com"):
         try:
@@ -360,7 +375,7 @@ def scrape_address() -> Response:
             err = f"cannot fetch ultimate url of tiktok post, err: {e}"
             logger.error(err, exc_info=True)
             print(err)
-            return generate_response({"error": err}, 400)
+            return "", "", err
         media_type = check_tiktok_type(url)
         if media_type == 'photo':
             res, err = handle_tiktok_photo(url)
@@ -388,20 +403,10 @@ def scrape_address() -> Response:
     if err:
         logger.error(err, exc_info=True)
         print(f"failed to fetch from {url}, err={err}")
-        return generate_response({"error": f"failed to fetch from {url}, err={err}"}, 500)
+        return "", "", "failed to fetch from {url}, err={err}"
     logger.info("text identified = {res}")
     print("text identified =", res)
-    address = generate_address_from_model(res, prompt)
-    logger.info("generated information = {address}")
-    print("address", address)
-    result = generate_markers(address, 3)
-    logger.info("generated information = {address}")
-    print("result", result)
-    # Convert PlaceInfo objects to dictionaries
-    result_dicts = [vars(place) for place in result]
-    if len(result) > 0:
-        set_cache(cache_key, result_dicts)
-    return generate_response(result_dicts, 200)
+    return res, prompt, None
 
 def generate_response(res: any, status: int) -> Response:
     response = jsonify(res)
@@ -482,8 +487,8 @@ def generate_markers(addressStruct: Dict[str, List[str]], mode: int = 2) -> List
             location += (' ' + addresses[0])
         if 'area' in addresses_struct:
             location += (' ' + addresses_struct['area'])
-        info = map_info(location, mode)
-        if not validate_place_info(info, name):
+        info, err = map_info(location, mode)
+        if err != None or not validate_place_info(info, name):
             continue
         if 'description' in addresses_struct:
             info.Description = addresses_struct['description']
@@ -496,16 +501,16 @@ def generate_single_address() -> Response:
     print("address", address)
     if not address:
         return jsonify({"error": "address is required"}), 400
-    res = map_info(address)
+    res, err = map_info(address)
     print("res", res)
     response = jsonify(res)
     response.headers.add("Access-Control-Allow-Origin", "*")
     response.headers.add("Access-Control-Allow-Headers", "Content-Type, Authorization")
     response.headers.add("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-    response.status_code = 200 
+    response.status_code = 200 if err == None else 400
     return response
 
-def map_info(address: str, mode: int = 2) -> Optional[PlaceInfo]:
+def map_info(address: str, mode: int = 2) -> Tuple[Optional[PlaceInfo], Optional[Dict]]:
     allowed_fields = [PlaceSearchFieldsNew_Free, PlaceSearchFieldsNew_Basic, PlaceSearchFieldsNew_Premium][:mode]
     fields = ','.join(list(itertools.chain(*allowed_fields)))
     detail_params = {
@@ -523,12 +528,16 @@ def map_info(address: str, mode: int = 2) -> Optional[PlaceInfo]:
             headers=detail_headers
         )
     except Exception as error:
-        logger.error(f"google info fetch failed, param={detail_params}, err = {error}")
-        return None
+        err = f"google info fetch failed, param={detail_params}, err = {error}"
+        logger.error(err)
+        print(err)
+        return {"error": err}, err
     detail_data = detail_response.json().get("places", "")
     if not detail_response.ok or not detail_data:
-        logger.error(f"google info fetch failed, param={detail_params}, err = {detail_response.text}")
-        return None
+        err = f"google info fetch failed, param={detail_params}, err = {detail_response.text}"
+        print(err)
+        logger.error(err)
+        return {"error": err}, err
     detail = detail_data[0]
     return PlaceInfo(
         Id=detail.get("id", ""),
@@ -545,7 +554,7 @@ def map_info(address: str, mode: int = 2) -> Optional[PlaceInfo]:
         GoogleLink=detail.get("googleMapsLinks",  {}).get("placeUri", None),
         DirectionLink=detail.get("googleMapsLinks",  {}).get("directionsUri", None),
         Description=''
-    )
+    ), None
 
 # def default_map_info(address: str) -> Optional[PlaceInfo]:
 #     detail_response = gmaps.find_place(
