@@ -2,18 +2,18 @@
 
 AI-powered map assistant that automatically extracts and visualises the locations mentioned in social media posts/websites (no more manual google map searches for the restaurants you find on tiktok). Built with Flask, React, GPT-4 API integration, Telebot API, and Google Maps API.
 
-1. Share the link directly to telegram chat bot Aumi and access the web app
+1. Share the link directly to telegram chat bot Aumi to access the web app
 <img src="./docs/demo0.png" alt="drawing" width="400"/>
 
-2. Or choose to input the website/tiktok/rednote link directly on the web app
+2. Or choose to input the website/tiktok/rednote link directly on https://aumi-gamma.vercel.app/
 <img src="./docs/demo1.png" alt="drawing" width="400"/>
 
 3. Map renders the locations found on the page
 <img src="./docs/demo2.png" alt="drawing" width="400"/>
 
-4. Info such as description of the location from the source url, opening hours, direction info from current location etc are rendered by clicking on the location.
+4. Metadata like opening hours, travel time etc are rendered by clicking on any of the location pins.
 <p float="left">
-  <img src="./docs/demo3.png" alt="drawing" width="600"/>
+  <img src="./docs/demo3.png" alt="drawing" width="450"/>
   <img src="./docs/demo4.png" alt="drawing" width="300"/>
   <p>
     <em>Web app visualisation on the left, source information (tiktok video+caption) on the right</em>
@@ -30,20 +30,27 @@ AI-powered map assistant that automatically extracts and visualises the location
 1. Bot interface = no need to download apps (ideally the user has telegram)
 2. "Why not just search 'cafes near me' on google maps/ why not just ask chatgpt for recommendations": Many still rely on social media apps for direct recommendations and reviews
 
-## Ultimate vision: LLM orchestrated agentic workflow without predetermined structure
-Aumi's processes can be abstracted into a workflow comprising the following steps: 
+## Ultimate vision: LLM-orchestrated agentic system that dynamically fetches relevant data
+Aumi's processes can be abstracted into a workflow comprising of the following function calls: 
 1. Domain-aware content retrieval <code>scraper(url) -> content</code>
 2. Address extractor  <code>extractor(text) -> []addresses</code>
 3. Location info retriever <code>address_info(address name) -> location object</code>
-4. map visualisation <code>renderer(coordinates) -> interactive component</code>
-Aumi initially ewxecuted this workflow through predetermined function calls. In an LLM-orchestrated architecture, these functions are MCP servers that the model can dynamically call. Rather than following predetermined workflows, the LLM acts as the orchestrator, selecting and sequencing appropriate MCP servers to fulfill requests. 
+4. Map visualisation <code>renderer(coordinates) -> interactive component</code>
+In an LLM-orchestrated architecture, these functions are MCP servers that the model can dynamically call. Rather than following predetermined workflows, the LLM acts as the orchestrator, selecting and sequencing appropriate MCP servers to fulfill requests. 
 
-In the following experiment, function 1 and 3 were made into independent MCP tools; when instructed to extract location details from cafes in the url, Claude was able to correctly execute this 3-step workflow with minimal prompting:
+In the following experiment, function 1 and 3 were made into independent MCP tools; when instructed to extract location details from cafes in the url, Claude was able to execute this 3-step workflow with minimal prompting:
 
-<img src="./docs/demo5.png" alt="drawing" width="700"/>
+<img src="./docs/demo5.png" alt="drawing" width="500"/>
 
-With the addition of more sophisticated MCP servers, its possible to extend the workflow to query for information like reservation availability (OpenTable MCP), ongoing promotions (website parsing MCP) etc. To achieve seamless app to app communication workflow, users can interact through any client interface (telegram webapp/web browsers/google map search bar) to trigger a call to the LLM orchestrator, instead of engaging directly with the model's chat interface.
+Day-to-day usage involves complicated queries that require more sophisticated MCP servers: when searching for restaurants its good to know if reservations are available (OpenTable); for tourist destinations, its useful to know ticket prices (Klook). In the following, I instructed Claude that it was receiving messages from a chat client, and to provide whatever information it thought could be helpful to the conversation. It was able to execute not just the functions above, but also to call on reservation_slots (and not ticket_pricing) for the specific day that was suggested in the chat. 
 
+<p float="left">
+  <img src="./docs/demo6_1.png" alt="drawing" width="250"/>
+  <img src="./docs/demo6_2.png" alt="drawing" width="250"/>
+  <img src="./docs/demo6_3.png" alt="drawing" width="250"/>
+</p>
+
+Interestingly it doesn't work as well when I try to abstract the input format (see appendix).
 
 ## Challenges in accurate address extraction:
 1. **Identifying core elements to process:** Exclude irrelevant content and unrelated locations from the input sent to llm models
@@ -93,6 +100,19 @@ With the addition of more sophisticated MCP servers, its possible to extend the 
 - Set up dark and light mode
 
 ## Appendix
+
+#### Claude hallucinates instead of running MCP tools
+??? Where did this come from??
+
+<img src="./docs/annex5.png" alt="drawing" width="400"/>
+
+#### Can't chain MCP calls when abstracting input format
+Only scraper was called even though the model knew timing information is relevant and helpful to the conversation.
+
+<p float="left">
+  <img src="./docs/annex6_1.png" alt="drawing" width="300"/>
+  <img src="./docs/annex6_2.png" alt="drawing" width="300"/>
+</p>
 
 #### Overt vs subtle ads on websites
 Soft ads cant be identified by readability (since it is sponsored content maybe we should leave it be?)
