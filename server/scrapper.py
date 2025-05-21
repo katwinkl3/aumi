@@ -28,6 +28,7 @@ import numpy as np
 from PIL import Image
 import io
 import cv2
+import random
 
 # Set up logging
 logging.basicConfig(
