@@ -7,13 +7,13 @@ from openai import OpenAI
 import requests
 import trafilatura
 from readability import Document
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+# from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from functools import lru_cache
 import sys
 import logging
 from typing import Dict, List, Tuple, Any, Optional
-from ratelimit import limits, sleep_and_retry
 from threading import Thread
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import itertools
@@ -21,14 +21,19 @@ import hashlib
 import redis
 import json
 from urllib.parse import urlparse, quote
-from urllib.request import Request, urlopen
+# from urllib.request import Request, urlopen
 import easyocr
-import pytesseract
+# import pytesseract
 import numpy as np
 from PIL import Image
 import io
 import cv2
-import random
+# import random
+import socket
+import ipaddress
+import re
+from html import escape
+import nh3
 
 # Set up logging
 logging.basicConfig(
@@ -59,7 +64,8 @@ app.redis = redis.Redis.from_url(app.config['REDIS_URL'])
 limiter = Limiter(
     app=app,
     key_func=get_remote_address,
-    default_limits=["10 per day", "1 per hour"]
+    default_limits=["10 per day", "1 per hour"],
+    storage_uri="redis://localhost:6379"
 )
 
 
@@ -73,20 +79,12 @@ CORS(app, resources={
 
 @app.route('/', methods=["GET", "POST"])
 def hewwo():
-    return str(TelegramBot == None)
+    return "im up"
 
 @app.route('/google_token', methods=["GET", "POST"])
 @limiter.limit("60 per minute") 
 def get_google_token():
     return generate_response({"token": GOOGLE_TOKEN}, 200)
-
-# @app.route('/openai_token', methods=["GET", "POST"])
-# def get_openai_token():
-#     response = jsonify({"token": OPENAI_TOKEN})
-#     response.headers.add("Access-Control-Allow-Origin", "*")
-#     response.headers.add("Access-Control-Allow-Headers", "Content-Type, Authorization")
-#     response.headers.add("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-#     return response
 
 @app.route('/test_scrapper_error', methods=["GET", "POST"])
 def get_test_scrapper_error():
@@ -113,46 +111,75 @@ def fetch_website(
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     logger.info(f"Fetching website: {url}")
     print("fetching website", url)
+    
     try:
-        response = requests.request(
-            method=method.upper(),
-            url=url,
-            headers=headers,
-            params=params,
-            data=data,
-            json=json_data,
-            timeout=timeout,
-            allow_redirects=allow_redirects
-        )
-        response.raise_for_status()
-        if is_html:
-            return response.text, None
-        return response.json(), None
+        # Create session with connection pooling limits
+        with requests.Session() as session:
+            session.max_redirects = 5  # Limit redirects to prevent loops
+            
+            response = session.request(
+                method=method.upper(),
+                url=url,
+                headers=headers,
+                params=params,
+                data=data,
+                json=json_data,
+                timeout=timeout,
+                allow_redirects=allow_redirects,
+                stream=True  # Stream to check content length
+            )
+            
+            # Check content type
+            content_type = response.headers.get('Content-Type', '').lower()
+            if not any(allowed in content_type for allowed in ALLOWED_CONTENT_TYPES):
+                response.close()
+                return None, f"Unsupported content type: {content_type}"
+            
+            # Check content length
+            content_length = response.headers.get('Content-Length')
+            if content_length and int(content_length) > MAX_CONTENT_LENGTH:
+                response.close()
+                return None, f"Response too large: {content_length} bytes"
+            
+            # Read with size limit
+            content = b''
+            for chunk in response.iter_content(chunk_size=8192):
+                content += chunk
+                if len(content) > MAX_CONTENT_LENGTH:
+                    response.close()
+                    return None, "Response too large"
+            
+            response.raise_for_status()
+            
+            if is_html:
+                # Decode and return text
+                text_content = content.decode('utf-8', errors='ignore')
+                return text_content, None
+            else:
+                # Parse JSON
+                json_content = json.loads(content.decode('utf-8', errors='ignore'))
+                return json_content, None
         
+    except requests.exceptions.Timeout:
+        error_msg = f"Request timed out after {timeout} seconds"
+        logger.error(error_msg)
+        return None, error_msg
+    except requests.exceptions.TooManyRedirects:
+        error_msg = "Too many redirects"
+        logger.error(error_msg)
+        return None, error_msg
     except requests.exceptions.RequestException as e:
         error_msg = f"Request failed: {str(e)}"
         logger.error(error_msg, exc_info=True)
-        print(error_msg)
         return None, error_msg
-    except ValueError as e:
-        error_msg = f"Failed to decode JSON response: {str(e)}"
+    except (ValueError, json.JSONDecodeError) as e:
+        error_msg = f"Failed to decode response: {str(e)}"
         logger.error(error_msg, exc_info=True)
-        print(error_msg)
         return None, error_msg
 
 # ocr from image
-def extract_text_from_url(image_url):
-    logger.info(f"extracting text from url: {image_url}")
-    print("extracting text from url", image_url)
-    response = requests.get(image_url)
-    if response.status_code != 200:
-        # return f"Failed to download image: HTTP {response.status_code}"
-        logger.error(f"Failed to download image: from {image_url}", exc_info=True)
-        print(f"Failed to download image: from {image_url}")
-        return ''
-    image_bytes = io.BytesIO(response.content)
+def process_image_text(image_bytes):
     img = Image.open(image_bytes)
-
     # preprocess ## todo - find a more refined preprocessor 
     # grayscale
     img_array = np.array(img)
@@ -172,6 +199,105 @@ def extract_text_from_url(image_url):
     easyocr_text = " ".join(easyocr_results)
     return easyocr_text
 
+def extract_text_from_url(image_url, session=None):
+    logger.info(f"extracting text from url: {image_url}")
+    print("extracting text from url", image_url)
+    
+    try:
+        # Use provided session or create a one-off request
+        if session:
+            response = session.get(image_url, timeout=timeout, stream=True)
+        else:
+            response = requests.get(image_url, timeout=timeout, stream=True)
+        
+        # Check content type is an image
+        content_type = response.headers.get('Content-Type', '').lower()
+        if not any(img_type in content_type for img_type in ALLOWED_IMG_TYPES):
+            logger.error(f"Invalid content type for image: {content_type}")
+            return ''
+        
+        # Limit image size to prevent DoS
+        max_image_size = 20 * 1024 * 1024  # 20MB
+        content_length = response.headers.get('Content-Length')
+        if content_length and int(content_length) > max_image_size:
+            logger.error(f"Image too large: {content_length} bytes")
+            return ''
+        
+        # Read image with size limit
+        image_data = b''
+        for chunk in response.iter_content(chunk_size=8192):
+            image_data += chunk
+            if len(image_data) > max_image_size:
+                response.close()
+                logger.error("Image too large during download")
+                return ''
+        
+        if response.status_code != 200:
+            logger.error(f"Failed to download image: from {image_url}")
+            print(f"Failed to download image: from {image_url}")
+            return ''
+        
+        image_bytes = io.BytesIO(image_data)
+        easyocr_text = process_image_text(image_bytes)
+        return easyocr_text
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error downloading image from {image_url}: {e}")
+        return ''
+    except Exception as e:
+        logger.error(f"Error processing image from {image_url}: {e}")
+        return ''
+
+def extract_text_from_urls(image_urls):
+    """
+    Extract text from multiple images concurrently using OCR.
+    
+    Args:
+        image_urls: List of image URLs to process
+        
+    Returns:
+        List of extracted text strings (escaped for safety)
+    """
+    if not image_urls:
+        return []
+    if len(image_urls) == 1:
+        return [extract_text_from_url(image_urls[0])]
+    
+    texts = []
+    
+    # Create a session for connection pooling
+    with requests.Session() as session:
+        # Configure session for better performance
+        session.headers.update({'User-Agent': 'Mozilla/5.0'})
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=10,
+            pool_maxsize=10,
+            max_retries=3
+        )
+        session.mount('http://', adapter)
+        session.mount('https://', adapter)
+        
+        # Process images concurrently
+        with ThreadPoolExecutor(max_workers=min(len(image_urls), 5)) as executor:
+            # Submit all tasks
+            future_to_url = {
+                executor.submit(extract_text_from_url, url, session): url 
+                for url in image_urls
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_url):
+                url = future_to_url[future]
+                try:
+                    text = future.result()
+                    if text:
+                        texts.append(escape(text))
+                except Exception as e:
+                    logger.error(f"Failed to extract text from {url}: {e}")
+                    print(f"Failed to extract text from {url}: {e}")
+    
+    return texts
+
 # Handle tiktok data:
 
 # fetches from image links found
@@ -190,22 +316,26 @@ def handle_tiktok_photo(tiktok_url):
     data, err = fetch_website(url=url, headers=headers, method="POST", params=payload, timeout=timeout, is_html=False)
     if err != None:
         return None, err
+    if 'data' not in data:
+        return None, "Invalid response format from TikTok API"
     soup = BeautifulSoup(data['data'], 'html.parser')
     res = ""
     caption = soup.find('h3')
     if caption != None:
-        res += ("caption: "+caption.text+'\n')
+        # Escape caption text
+        res += ("caption: "+escape(caption.text)+'\n')
     urls = []
     for img in soup.find_all('img'):
         if img.get("alt") != 'savetik':
             continue
         link = img.get("src")
-        if 'tiktokcdn' in link:
+        if link and 'tiktokcdn' in link:
             urls.append(link)
-    texts = []
-    for image_url in urls:
-        text = extract_text_from_url(image_url)
-        texts.append(text)
+    
+    # Extract text from all images concurrently
+    texts = extract_text_from_urls(urls)
+    if texts:
+        res += "parsed text: "
     res += '\n'.join(texts)
     logger.info(f"extracted text from tiktok photo: {res}")
     print("extracted text from tiktok photo", res)
@@ -217,24 +347,31 @@ def handle_tiktok_video(tiktok_url):
     print("extracting text from tiktok video", tiktok_url)
     url = TIKTOK_VIDEO_URL + tiktok_url
     headers = {
-        'Origin': 'https://script.tokaudit.io',
-        'Referer': 'https://script.tokaudit.io/',
+        'Origin': TIKTOK_VIDEO_ORIGIN_URL,
+        'Referer': TIKTOK_VIDEO_REFERER_URL,
         'User-Agent': 'Mozilla/5.0 ()',
-        'Host': 'scriptadmin.tokbackup.com',
-        'x-api-key': 'Toktools2024@!NowMust'
+        'Host': TIKTOK_VIDEO_HOST,
+        'x-api-key': TIKTOK_VIDEO_API
     }
     data, err = fetch_website(url=url, headers=headers, timeout=timeout, is_html=False)
     if err != None:
         return None, err
+    
+    # Validate response format
+    if not isinstance(data, dict):
+        return None, "Invalid response format from TikTok video API"
+    
     subtitle = fetch_subtitles(data)
     description = fetch_descriptions(data['data'])
+    
     res = ''
-    if len(subtitle) > 0:
-        res += "audio: "+subtitle
-    if len(description) > 0:
-        if len(res) > 0:
+    if subtitle:
+        res += "audio: " + subtitle
+    if description:
+        if res:
             res += "\n"
-        res += "caption: "+description
+        res += "caption: " + description
+    
     logger.info(f"extracted subtitle: {subtitle}, description: {description}")
     print(f"extracted subtitle: {subtitle}, description: {description}")
     return res, None
@@ -242,11 +379,13 @@ def handle_tiktok_video(tiktok_url):
 def fetch_descriptions(data):
     if not data or 'desc' not in data:
         return ""
-    return data['desc']
+    desc = data.get('desc', '')
+    # Ensure it's a string and not None
+    return str(desc) if desc else ""
     
 def fetch_subtitles(data):
     subtitles = []
-    if 'subtitles' not in data or not data['subtitles']:
+    if 'subtitles' not in data or not isinstance(data, dict) or not data['subtitles']:
         return ""
     for i in data['subtitles'].split('\n\n'): #parsing manually as millisecond is missing for webvtt-py to work
         sub = i.split('\n')
@@ -262,7 +401,7 @@ def check_tiktok_type(url: str) -> str:
     elif "/video/" in url:
         return 'video'
     else:
-        logger.warn(f"unknown media type in url: {url}")
+        logger.warning(f"unknown media type in url: {url}")
         return f"unknown media type in url: {url}"
 
 
@@ -274,14 +413,29 @@ def handle_rednote_photo(url) -> Tuple[Optional[str], Optional[str]]:
     data, err = fetch_website(url=url)
     if err != None:
         return None, err
-    soup = BeautifulSoup(data, 'html.parser') 
-    desc = soup.find('meta', {'name': 'description'}).get('content')
-    links = [i.get('content') for i in soup.find_all('meta', {'name': 'og:image'})]
-    texts = []
-    for image_url in links:
-        text = extract_text_from_url(image_url)
-        texts.append(text)
-    result = desc + '. '.join(texts)
+    
+    soup = BeautifulSoup(data, 'html.parser')
+    
+    desc_tag = soup.find('meta', {'name': 'description'})
+    desc = ""
+    if desc_tag and desc_tag.get('content'):
+        desc = escape(desc_tag.get('content'))
+    if desc:
+        desc += '.'
+    
+    links = []
+    for meta_tag in soup.find_all('meta', {'name': 'og:image'}):
+        content = meta_tag.get('content')
+        if content:
+            links.append(content)
+    
+    # Extract text from all images concurrently
+    texts = extract_text_from_urls(links)
+    
+    result = desc
+    if texts:
+        result += '. '.join(texts)
+    
     logger.info(f"extracted text from rednote photo: {result}")
     # todo - if fail, fall back on handle_website
     print("extracted text from rednote photo", result)
@@ -305,28 +459,116 @@ def get_text_with_tags(soup, tags_to_keep=['b', 'li']):
             tag.unwrap()  # Remove the tag but keep its content
     return str(soup)
 
+def sanitize_html(html_content):
+    """
+    Sanitize HTML content for text extraction using nh3.
+    Optimized for:
+    1. Security - prevents XSS and other attacks
+    2. Text extraction - preserves readable content
+    3. Minimal context - removes unnecessary elements to reduce token usage
+    """
+    if not html_content:
+        return ''
+    try:
+        # Configure nh3 to only keep text-relevant tags
+        # This dramatically reduces HTML size while preserving structure for text extraction
+        cleaned = nh3.clean(
+            html_content,
+            tags={
+                # Text content tags
+                "p", "br", "h1", "h2", "h3", "h4", "h5", "h6",
+                "blockquote", "pre", "code",
+                # List tags
+                "ul", "ol", "li",
+                # Semantic tags that may contain important text
+                "article", "section", "main", "aside",
+                # Table tags (often contain structured data)
+                "table", "tr", "td", "th", "thead", "tbody",
+                # Inline tags that may affect text meaning
+                "b", "strong", "i", "em", "span",
+                # Link tags (keep for context but strip href)
+                "a"
+            },
+            # Remove all attributes except these (minimizes output size)
+            attributes={
+                # Keep alt text for accessibility/context
+                "img": {"alt"},
+                # Keep table headers for structure understanding
+                "th": {"scope"},
+                "td": {"colspan", "rowspan"}
+            },
+            # Strip all URLs to prevent security issues and reduce size
+            link_rel=None,
+            # Remove comments entirely
+            strip_comments=True,
+            # Additional security: ensure no javascript: or data: URLs
+            url_schemes={"http", "https"},
+            # Clean up whitespace
+            clean_content_tags={"script", "style"}
+        )
+        
+        # Additional cleanup to minimize tokens
+        # Remove excessive whitespace while preserving structure
+        cleaned = re.sub(r'\n\s*\n+', '\n\n', cleaned)
+        cleaned = re.sub(r'[ \t]+', ' ', cleaned)
+        
+        return cleaned.strip()
+        
+    except Exception as e:
+        logger.error(f"HTML sanitization with nh3 failed: {e}")
+        # Return empty string on error to be safe
+        return ""
+
 # Handle normal (blog post) website data:
 def handle_website(url, headers: Optional[Dict[str, str]] = {"User-Agent": "Mozilla/5.0"}):
     data, err = fetch_website(url=url, headers=headers)
     if err != None:
         return None, err
-    # 1. readability
-    doc = Document(data)
-    soup = BeautifulSoup(doc.summary(), 'html.parser')
-    txt1 = get_text_with_tags(soup)
-    # 2. trafilatura
-    downloaded = trafilatura.fetch_url(url)
-    txt2 = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
-    # baseline = beautifulsoup
-    soup = BeautifulSoup(data, 'html.parser')
-    control = get_text_with_tags(soup)
-    if max(len(txt1), len(txt2)) < 2000 and len(control)/max(len(txt1), len(txt2)) >= 10: #
-        return doc.title() + "\n" + control, None
-    if len(txt1) > len(txt2):
-        return doc.title() + "\n" + txt1, None
-    return doc.title() + "\n" + txt2, None
-
+    if not data:
+        return None, "No data from fetched page"
+    # Sanitize HTML to prevent XSS
+    cleaned_html = sanitize_html(data)
+    if not cleaned_html:
+        return None, "Failed to sanitize HTML content"
     
+    try:
+        # 1. readability
+        doc = Document(cleaned_html)
+        soup = BeautifulSoup(doc.summary(), 'html.parser')
+        txt1 = get_text_with_tags(soup)
+        
+        # 2. trafilatura with timeout
+        txt2 = None
+        try:
+            downloaded = trafilatura.fetch_url(url, timeout=timeout)
+            if downloaded:
+                txt2 = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
+            if len(txt2) > len(txt1):
+                txt1 = txt2
+        except Exception as e:
+            logger.warning(f"Trafilatura extraction failed: {e}")
+            print(f"Trafilatura extraction failed: {e}")
+        
+        # baseline = beautifulsoup
+        soup = BeautifulSoup(cleaned_html, 'html.parser')
+        control = get_text_with_tags(soup)
+        
+        # Choose the best extraction
+        if len(txt1) < 2000 and len(control)/len(txt1) >= 10:
+            result = doc.title() + "\n" + control
+        else:
+            result = doc.title() + "\n" + txt1
+        
+        # Final escape of any HTML entities for safety
+        result = escape(result, quote=False)
+        
+        return result, None
+        
+    except Exception as e:
+        error_msg = f"Failed to process website content: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return None, error_msg
+ 
 
 @app.route('/scrapper', methods=["GET", "POST"])
 @limiter.limit("10 per minute") 
@@ -345,7 +587,9 @@ def scrape_address() -> Response:
     scraped, prompt, err = scrape(url)
     if err != None:
         return generate_response({"error": err}, 400)
-    address = generate_address_from_model(scraped, prompt)
+    address, err = generate_address_from_model(scraped, prompt)
+    if err != None:
+        return generate_response({"error": err}, 400)
     logger.info("generated information = {address}")
     print("address", address)
     result = generate_markers(address, 3)
@@ -357,15 +601,82 @@ def scrape_address() -> Response:
         set_cache(cache_key, result_dicts)
     return generate_response(result_dicts, 200)
 
+def validate_url(url):
+    """
+    Validate and sanitize URL for security.
+    
+    Args:
+        url: The URL to validate
+        
+    Returns:
+        Tuple[Optional[ParseResult], Optional[str]]: (parsed_url, error_message)
+        Returns (parsed_url, None) if valid, or (None, error_message) if invalid
+    """
+    # Basic URL validation
+    if not url or not isinstance(url, str):
+        return None, "URL must be a non-empty string"
+    
+    # Limit URL length to prevent DoS
+    if len(url) > MAX_URL_LENGTH:
+        return None, "URL too long (max 2048 characters)"
+    
+    # Parse and validate URL structure
+    parsed = urlparse(url)
+    if not all([parsed.scheme, parsed.netloc, parsed.hostname]):
+        return None, "Invalid URL format"
+    
+    # Only allow HTTP(S) protocols
+    if parsed.scheme not in ('http', 'https'):
+        return None, "Only HTTP and HTTPS protocols are supported"
+    
+    # Domain blacklist check
+    if parsed.hostname in BLACKLISTED_DOMAINS:
+        return None, "Access to this address is not allowed"
+    
+    # Check for suspicious patterns in hostname
+    if re.search(r'[\x00-\x1f\x7f-\x9f]', parsed.hostname):
+        return None, "Invalid characters in hostname"
+    
+    # Prevent URL encoding attacks
+    if quote(url, safe="-._~:/?#[]@!$&'()*+,;=%") != url:
+        return None, "URL contains invalid characters"
+    
+    # SSRF Protection: Resolve hostname and check IP
+    try:
+        # Get all IP addresses for the hostname
+        ip_addresses = socket.getaddrinfo(parsed.hostname, None) #todo add all ip addresses
+        
+        for addr_info in ip_addresses:
+            ip_str = addr_info[4][0]
+            try:
+                ip_obj = ipaddress.ip_address(ip_str)
+                
+                # Additional checks for special addresses
+                if ip_obj.is_private or ip_obj.is_reserved or ip_obj.is_loopback or ip_obj.is_link_local:
+                    return None, "Access to special IP addresses is not allowed"
+                    
+            except ValueError:
+                continue
+                
+    except (socket.gaierror, socket.error) as e:
+        # Log but continue - hostname might be valid but temporarily unresolvable
+        logger.warning(f"DNS resolution failed for {parsed.hostname}: {e}")
+        print(f"DNS resolution failed for {parsed.hostname}: {e}")
+        return None, "DNS resolution failed, try again"
+    
+    return parsed, None
+
 def scrape(url):
     '''
-    adaptive scraping based on domain
+    adaptive scraping based on domain with security measures
     '''
-    parsed = urlparse(url)
-    if not all([parsed.scheme, parsed.netloc]):
-        return "", "", "Invalid URL format"
+    # Validate URL
+    parsed, error = validate_url(url)
+    if error:
+        return "", "", error
+    
     print("requested url", url)
-    logger.info("requested url = {url}")
+    logger.info(f"requested url = {url}")
     res, prompt, err = None, WEBSITE_PROMPT, None
     # fetch from tiktok
     if parsed.netloc in ("vt.tiktok.com", "www.tiktok.com"):
@@ -404,8 +715,8 @@ def scrape(url):
     if err:
         logger.error(err, exc_info=True)
         print(f"failed to fetch from {url}, err={err}")
-        return "", "", "failed to fetch from {url}, err={err}"
-    logger.info("text identified = {res}")
+        return "", "", f"failed to fetch from {url}, err={err}"
+    logger.info(f"text identified = {res}")
     print("text identified =", res)
     return res, prompt, None
 
@@ -453,16 +764,19 @@ def generate_address_from_model(text: str, prompt: str) -> Dict[str, List[str]]:
         ]
     )
     resp = completion.choices[0].message.content
+    if not isinstance(resp, str):
+        logger.error(f"response not string: {resp}")
+        return  None, f"response not string: {resp}"
     resp = resp.replace('```', '').replace('\n', '') #todo: find a fix
     print("resp", resp)
     if resp[:4] == 'json':
         resp = resp[4:]
     try:
-        address = eval(resp)
+        address = json.loads(resp)
     except Exception as error:
         logger.error(f"failed to extract {resp}, err = {error}")
-        raise
-    return address
+        return None, f"failed to extract {resp}, err = invalid json"
+    return address, None
 
 def validate_place_info(place_info: Optional[PlaceInfo], name: str) -> bool:
     if not place_info:
@@ -486,7 +800,7 @@ def generate_markers(addressStruct: Dict[str, List[str]], mode: int = 2) -> List
             addresses = addresses_struct['address']
         if len(addresses) > 0 and address_check:
             location += (' ' + addresses[0])
-        if 'area' in addresses_struct:
+        if 'area' in addresses_struct and addresses_struct['area'] != '':
             location += (' ' + addresses_struct['area'])
         info, err = map_info(location, mode)
         if err != None or not validate_place_info(info, name):
@@ -639,3 +953,6 @@ def webhook():
 #     except Exception as e:
 #         logger.error(f"Error processing webhook: {e}")
 #         return Response(status=500)
+
+if __name__ == "__main__": #for debugging
+    app.run()

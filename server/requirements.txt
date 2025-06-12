@@ -1,5 +1,7 @@
 # Web and API
 flask==2.3.3
+flask-cors
+flask-limiter
 requests==2.31.0
 
 # Telegram Bot
@@ -7,10 +9,15 @@ python-telegram-bot==20.6
 
 # Data Processing
 beautifulsoup4==4.12.2
+trafilatura
+readability-lxml
 python-dotenv==1.0.0
+nh3==0.2.14
 
 # AI Integration
 openai==1.3.0
+easyocr
+pillow
 
 # Database
 redis==5.0.1
@@ -18,3 +25,9 @@ redis==5.0.1
 # Testing
 pytest==7.4.3
 pytest-asyncio==0.21.1
+
+# HTTP Client (from pyproject.toml)
+httpx>=0.25.0
+
+# # MCP CLI (from pyproject.toml)
+# mcp[cli]>=1.8.0
